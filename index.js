@@ -1,9 +1,15 @@
 process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
 'use strict';
 
+// 🔧 PASO OBLIGATORIO: INSTALAR NAVEGADOR AL INICIAR
+const { execSync } = require('child_process');
+console.log('🔄 Instalando navegador...');
+try {
+  execSync('npx playwright install chromium --path /tmp/playwright-browsers', { stdio: 'ignore' });
+} catch (e) { /* continuar */ }
+
 require('dotenv').config();
 const http = require('http');
-const { exec } = require('child_process');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 
