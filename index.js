@@ -1,17 +1,17 @@
 process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
 'use strict';
-'use strict';
+
 require('dotenv').config();
 const http = require('http');
 const { exec } = require('child_process');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 
-// 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
+// 🛡️ PROXY BRIGHT DATA MÉXICO
 const PROXY = {
   server: "http://brd.superproxy.io:44445",
   username: "brd-customer-hl_49d1a9d2-zone-isp_proxy1",
-  password: "ad8cde63-a718-47f6-a2b3-7a50049c4d61"
+  password: "ad8cde63-a718-4f62-a2b3-7a50049c4d61"
 };
 
 // 📡 PUERTO OBLIGATORIO PARA RENDER / SERVICIOS CLOUD
