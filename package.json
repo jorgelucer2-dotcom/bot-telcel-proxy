@@ -10,7 +10,6 @@
   },
   "scripts": {
     "start": "node index.js",
-    "build": "PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-browsers npm install && npx playwright install chromium",
-    "postinstall": "PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-browsers npx playwright install chromium"
+    "build": "npm install"
   }
 }
