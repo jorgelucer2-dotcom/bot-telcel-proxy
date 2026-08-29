@@ -7,21 +7,21 @@ const http = require('http');
 const { Telegraf } = require('telegraf');
 const { chromium } = require('playwright');
 
-// Instalar navegador
+// Instalar navegador sin errores
 try {
   execSync('npx playwright install chromium --path /tmp', { stdio: 'ignore', timeout: 60000 });
-} catch (e) {}
+} catch (err) {}
 
-// Proxy México
+// Proxy Bright Data México
 const PROXY = {
   server: "http://brd.superproxy.io:44445",
   username: "brd-customer-hl_49d1a9d2-zone-isp_proxy1",
   password: "ad8cde63-a718-4f62-a2b3-7a50049c4d61"
 };
 
-// Bot
+// Bot Telegram
 const bot = new Telegraf(process.env.BOT_TOKEN);
-bot.start(ctx => ctx.reply('🤖 Bot listo'));
+bot.start(ctx => ctx.reply('🤖 Bot activo'));
 bot.command('recarga', async ctx => {
   try {
     ctx.reply('🔄 Iniciando...');
@@ -32,21 +32,17 @@ bot.command('recarga', async ctx => {
     });
     const page = await browser.newPage();
     await page.goto('https://pay.telcel.com/package/1');
-    ctx.reply('✅ Página abierta');
+    ctx.reply('✅ Página lista');
     await browser.close();
-  } catch (err) {
-    ctx.reply('❌ Error: ' + err.message);
+  } catch (e) {
+    ctx.reply('❌ Error: ' + e.message);
   }
 });
 
-// 🛡️ PUERTO RENDER (SIN EMOJIS NI FALLOS)
+// Puerto Render (SIN EMOJIS, SOLO TEXTO)
 const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('OK');
-}).listen(PORT, () => {
-  console.log('Servidor en puerto:', PORT);
-});
+http.createServer((req, res) => res.end('OK')).listen(PORT);
+bot.launch();
 
 bot.launch();
 // 🤖 BOT TELEGRAM
