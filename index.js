@@ -1,41 +1,18 @@
 process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
 'use strict';
 
-// 🛠️ IMPORTACIONES CORRECTAS
+// 🔧 PASO OBLIGATORIO: INSTALAR NAVEGADOR AL INICIAR
+// ✅ CORRECCIÓN: Importamos execSync correctamente
 const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+console.log('🔄 Instalando navegador...');
+try {
+  execSync('npx playwright install chromium --path /tmp/playwright-browsers', { stdio: 'ignore' });
+} catch (e) { /* continuar */ }
+
 require('dotenv').config();
 const http = require('http');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
-
-// 📦 RUTA DEL NAVEGADOR
-const CHROME_PATH = path.join(process.env.PLAYWRIGHT_BROWSERS_PATH, 'chromium');
-
-// 🔄 INSTALACIÓN CON VERIFICACIÓN Y ESPERA
-console.log('🔄 Instalando navegador...');
-try {
-  // Crear carpeta si no existe
-  if (!fs.existsSync(process.env.PLAYWRIGHT_BROWSERS_PATH)) {
-    fs.mkdirSync(process.env.PLAYWRIGHT_BROWSERS_PATH, { recursive: true });
-  }
-  // Instalar Chromium
-  execSync('npx playwright install chromium --path /tmp/playwright-browsers', { 
-    stdio: 'inherit',
-    timeout: 120000 // 2 minutos máximo
-  });
-  // Esperar a que el archivo exista
-  let intentos = 0;
-  while (!fs.existsSync(CHROME_PATH) && intentos < 30) {
-    console.log('⌛ Esperando navegador...');
-    execSync('sleep 1');
-    intentos++;
-  }
-  console.log('✅ Navegador listo en:', CHROME_PATH);
-} catch (err) {
-  console.error('❌ Error instalando:', err);
-}
 
 // 🛡️ PROXY BRIGHT DATA MÉXICO
 const PROXY = {
