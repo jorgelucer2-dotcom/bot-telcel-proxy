@@ -5,6 +5,13 @@ const { exec } = require('child_process');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 
+// 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
+const PROXY = {
+  server: "http://brd.superproxy.io:44445",
+  username: "brd-customer-hl_49d1a9d2-zone-isp_proxy1",
+  password: "ad8cde63-a718-47f6-a2b3-7a50049c4d61"
+};
+
 const BOT_TOKEN = process.env.BOT_TOKEN || '8848937586:AAF5ARZdluPDkxtxhmtoay8v7QVD7wTXQ4E';
 const URL_NETFLIX = 'https://netflix.com/mx/';
 const URL_TELCEL = 'https://pay.telcel.com/package/1';
@@ -594,7 +601,12 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
 
     try {
         // ⚡ VELOCIDAD RÁPIDA: slowMo 50 para captura veloz
-        navegadorTelcel = await chromium.launch({ headless: false, slowMo: 50, args: ['--start-maximized', '--no-sandbox'] });
+        navegadorTelcel = await chromium.launch({
+            headless: false,
+            proxy: PROXY,
+            slowMo: 50,
+            args: ['--start-maximized', '--no-sandbox']
+        });
         navegadoresActivos.set(id, navegadorTelcel);
 
         contexto = await navegadorTelcel.newContext({
@@ -1156,6 +1168,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         // 1. Lanzar navegador independiente para este usuario
         navegador = await chromium.launch({
             headless: false,
+            proxy: PROXY,
             slowMo: 180,
             args: [
                 '--start-maximized',
