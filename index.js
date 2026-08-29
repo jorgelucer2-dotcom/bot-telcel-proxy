@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const http = require('http');
 const { exec } = require('child_process');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
@@ -12,6 +13,10 @@ const PROXY = {
   password: "ad8cde63-a718-47f6-a2b3-7a50049c4d61"
 };
 
+// 📡 PUERTO OBLIGATORIO PARA RENDER / SERVICIOS CLOUD
+const PUERTO = process.env.PORT || 3000;
+const ES_HEADLESS = process.env.HEADLESS === 'true' || Boolean(process.env.RENDER) || process.platform === 'linux';
+
 const BOT_TOKEN = process.env.BOT_TOKEN || '8848937586:AAF5ARZdluPDkxtxhmtoay8v7QVD7wTXQ4E';
 const URL_NETFLIX = 'https://netflix.com/mx/';
 const URL_TELCEL = 'https://pay.telcel.com/package/1';
@@ -20,6 +25,14 @@ const TIEMPO_MAX_COMANDO = 180000; // 3 minutos límite por proceso para evitar 
 const MAX_USUARIOS = 8;
 
 const bot = new Telegraf(BOT_TOKEN);
+
+// 🌐 SERVIDOR HTTP PARA HEALTHCHECK DE RENDER (EVITA ERROR DE PUERTO)
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('🤖 Bot Telcel Activo con Proxy México 🇲🇽');
+}).listen(PUERTO, () => {
+    console.log(`📡 Servidor HTTP activo en puerto ${PUERTO} (Render compatible)`);
+});
 
 // --------------------------------------------------
 // 🛡️ PROTECCIÓN GLOBAL CONTRA CAÍDAS DE NODE.JS
@@ -602,10 +615,10 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
     try {
         // ⚡ VELOCIDAD RÁPIDA: slowMo 50 para captura veloz
         navegadorTelcel = await chromium.launch({
-            headless: false,
+            headless: ES_HEADLESS,
             proxy: PROXY,
             slowMo: 50,
-            args: ['--start-maximized', '--no-sandbox']
+            args: ['--start-maximized', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
         });
         navegadoresActivos.set(id, navegadorTelcel);
 
@@ -1167,7 +1180,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 1. Lanzar navegador independiente para este usuario
         navegador = await chromium.launch({
-            headless: false,
+            headless: ES_HEADLESS,
             proxy: PROXY,
             slowMo: 180,
             args: [
@@ -1660,13 +1673,31 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
     }
 }
 
+// 🛡️ MANEJO DE SEÑALES PARA RENDER Y SERVIDORES CLOUD
+process.once('SIGINT', () => {
+    console.log('🛑 Recibido SIGINT, cerrando bot...');
+    bot.stop('SIGINT');
+    process.exit(0);
+});
+
+process.once('SIGTERM', () => {
+    console.log('🛑 Recibido SIGTERM, cerrando bot...');
+    bot.stop('SIGTERM');
+    process.exit(0);
+});
+
 function iniciarBotTelegram() {
-    bot.launch({ dropPendingUpdates: true })
-        .then(() => console.log("🤖 BOT TELEGRAM ACTIVO Y PROTEGIDO: LISTO PARA MULTIUSUARIOS (Capacidad: 8 concurrentes)"))
-        .catch(err => {
-            console.error("⚠️ Fallo en conexión de Telegram. Reintentando en 2 segundos...", err.message || err);
-            setTimeout(iniciarBotTelegram, 2000);
-        });
+    bot.launch({
+        dropPendingUpdates: true,
+        polling: {
+            timeout: 3000
+        }
+    })
+    .then(() => console.log(`✅ Bot corriendo en puerto ${PUERTO} | Proxy: MÉXICO 🇲🇽 (Capacidad: 8 concurrentes)`))
+    .catch(err => {
+        console.error("⚠️ Fallo en conexión de Telegram. Reintentando en 2 segundos...", err.message || err);
+        setTimeout(iniciarBotTelegram, 2000);
+    });
 }
 
 iniciarBotTelegram();
