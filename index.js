@@ -1,6 +1,5 @@
-processs.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers'; //
+process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
 'use strict';
-
 require('dotenv').config();
 const http = require('http');
 const { exec } = require('child_process');
