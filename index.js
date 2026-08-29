@@ -26,12 +26,14 @@ const MAX_USUARIOS = 8;
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// 🌐 SERVIDOR HTTP PARA HEALTHCHECK DE RENDER (EVITA ERROR DE PUERTO)
-http.createServer((req, res) => {
+// 🌐 SERVIDOR HTTP PARA HEALTHCHECK DE RENDER (0.0.0.0 OBLIGATORIO)
+const servidorHttp = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('🤖 Bot Telcel Activo con Proxy México 🇲🇽');
-}).listen(PUERTO, () => {
-    console.log(`📡 Servidor HTTP activo en puerto ${PUERTO} (Render compatible)`);
+});
+
+servidorHttp.listen(PUERTO, '0.0.0.0', () => {
+    console.log(`📡 Servidor HTTP activo y escuchando en 0.0.0.0:${PUERTO} (Render compatible)`);
 });
 
 // --------------------------------------------------
