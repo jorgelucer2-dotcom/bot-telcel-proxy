@@ -1,52 +1,28 @@
-process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp';
-'use strict';
+// 📋 COMANDOS
+bot.start((ctx) => ctx.reply('🤖 Bot activo\nEscribe /recarga para empezar'));
+bot.help((ctx) => ctx.reply('📲 Usa /recarga para iniciar pago'));
 
-const { execSync } = require('child_process');
-require('dotenv').config();
-const http = require('http');
-const { Telegraf } = require('telegraf');
-const { chromium } = require('playwright');
-
-// Instalar navegador sin errores
-try {
-  execSync('npx playwright install chromium --path /tmp', { stdio: 'ignore', timeout: 60000 });
-} catch (err) {}
-
-// Proxy Bright Data México
-const PROXY = {
-  server: "http://brd.superproxy.io:44445",
-  username: "brd-customer-hl_49d1a9d2-zone-isp_proxy1",
-  password: "ad8cde63-a718-4f62-a2b3-7a50049c4d61"
-};
-
-// Bot Telegram
-const bot = new Telegraf(process.env.BOT_TOKEN);
-bot.start(ctx => ctx.reply('🤖 Bot activo'));
-bot.command('recarga', async ctx => {
+bot.command('recarga', async (ctx) => {
   try {
-    ctx.reply('🔄 Iniciando...');
+    ctx.reply('🔄 Abriendo navegador...');
     const browser = await chromium.launch({
       headless: true,
-      proxy: PROXY,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      executablePath: CHROME_PATH, // ✅ AHORA SÍ ESTÁ DEFINIDO
+      proxy: {
+        server: PROXY.server,
+        username: PROXY.username,
+        password: PROXY.password
+      },
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
     });
     const page = await browser.newPage();
     await page.goto('https://pay.telcel.com/package/1');
-    ctx.reply('✅ Página lista');
+    ctx.reply('✅ Página lista. Ingresa datos.');
     await browser.close();
   } catch (e) {
     ctx.reply('❌ Error: ' + e.message);
   }
 });
-
-// Puerto Render (SIN EMOJIS, SOLO TEXTO)
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => res.end('OK')).listen(PORT);
-bot.launch();
-
-bot.launch();
-// 🤖 BOT TELEGRAM
-const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // 📋 COMANDOS
 bot.start((ctx) => ctx.reply('🤖 Bot activo\nEscribe /recarga para empezar'));
