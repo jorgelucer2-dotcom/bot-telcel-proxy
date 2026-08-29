@@ -1,7 +1,7 @@
 process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
 'use strict';
 
-// 🔧 PASO OBLIGATORIO: INSTALAR NAVEGADOR AL INICIAR
+// ✅ CORRECCIÓN: Importamos execSync correctamente
 const { execSync } = require('child_process');
 console.log('🔄 Instalando navegador...');
 try {
