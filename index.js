@@ -1,26 +1,54 @@
-process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
+process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp';
 'use strict';
 
-// 🔧 PASO OBLIGATORIO: INSTALAR NAVEGADOR AL INICIAR
-// ✅ CORRECCIÓN: Importamos execSync correctamente
 const { execSync } = require('child_process');
-console.log('🔄 Instalando navegador...');
-try {
-  execSync('npx playwright install chromium --path /tmp/playwright-browsers', { stdio: 'ignore' });
-} catch (e) { /* continuar */ }
-
 require('dotenv').config();
 const http = require('http');
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf } = require('telegraf');
 const { chromium } = require('playwright');
 
-// 🛡️ PROXY BRIGHT DATA MÉXICO
+// Instalar navegador
+try {
+  execSync('npx playwright install chromium --path /tmp', { stdio: 'ignore', timeout: 60000 });
+} catch (e) {}
+
+// Proxy México
 const PROXY = {
   server: "http://brd.superproxy.io:44445",
   username: "brd-customer-hl_49d1a9d2-zone-isp_proxy1",
   password: "ad8cde63-a718-4f62-a2b3-7a50049c4d61"
 };
 
+// Bot
+const bot = new Telegraf(process.env.BOT_TOKEN);
+bot.start(ctx => ctx.reply('🤖 Bot listo'));
+bot.command('recarga', async ctx => {
+  try {
+    ctx.reply('🔄 Iniciando...');
+    const browser = await chromium.launch({
+      headless: true,
+      proxy: PROXY,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    await page.goto('https://pay.telcel.com/package/1');
+    ctx.reply('✅ Página abierta');
+    await browser.close();
+  } catch (err) {
+    ctx.reply('❌ Error: ' + err.message);
+  }
+});
+
+// 🛡️ PUERTO RENDER (SIN EMOJIS NI FALLOS)
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('OK');
+}).listen(PORT, () => {
+  console.log('Servidor en puerto:', PORT);
+});
+
+bot.launch();
 // 🤖 BOT TELEGRAM
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
