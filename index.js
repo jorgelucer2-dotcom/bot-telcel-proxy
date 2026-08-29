@@ -1,3 +1,4 @@
+processs.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers'; //
 'use strict';
 
 require('dotenv').config();
