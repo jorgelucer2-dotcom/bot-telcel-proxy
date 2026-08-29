@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "build": "npx playwright install --with-deps chromium"
+    "build": "npx playwright install --with-deps chromium",
+    "render-build": "npm install && npx playwright install --with-deps chromium"
   }
 }
