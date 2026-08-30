@@ -1,275 +1,198 @@
 'use strict';
+
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const { chromium } = require('playwright');
-const fsPromises = require('fs/promises');
+const fs = require('fs/promises');
 const path = require('path');
-const http = require('http');
 
 // ==================================================
-// 🔑 CONFIGURACIÓN (MANTIENE MÚLTIPLES MONTOS)
+// 🔑 CONFIGURACIÓN
 // ==================================================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PROXY = process.env.PROXY;
 const URL_TELCEL = 'https://pay.telcel.com/package/1';
 const PUERTO = process.env.PORT || 3000;
 
-if (!BOT_TOKEN) {
-  console.error("❌ FALTA VARIABLE: BOT_TOKEN");
+if (!BOT_TOKEN || !PROXY) {
+  console.error("❌ FALTAN VARIABLES");
   process.exit(1);
 }
 
 const bot = new Telegraf(BOT_TOKEN);
-const sesiones = new Map();
-const CARPETA_TMP = path.join(__dirname, 'tmp');
+const sesionesActivas = new Map();
+const CARPETA_TEMPORAL = path.join(__dirname, 'capturas_tmp');
 
 // ==================================================
 // ⚙️ FUNCIONES AUXILIARES
 // ==================================================
-function esperar(ms) { return new Promise(r => setTimeout(r, ms)); }
-function ultimos4(dato) { return typeof dato === 'string' ? dato.slice(-4) : '**'; }
-function nombreAleatorio() {
-  const n = ["Carlos", "María", "Juan", "Ana", "Luis", "Sofía"];
-  const a = ["García", "Martínez", "López", "Pérez", "Rodríguez"];
-  return `${n[Math.floor(Math.random() * n.length)]} ${a[Math.floor(Math.random() * a.length)]}`;
+function esperar(ms) { return new Promise(r=>setTimeout(r,ms)); }
+function obtenerUltimos4(dato) { return typeof dato === 'string' ? dato.slice(-4) : '**'; }
+function generarNombreCompletoAleatorio() {
+  const n = ["Carlos","María","Juan","Ana","Luis","Sofía"];
+  const a = ["García","Martínez","López","Pérez","Rodríguez"];
+  return ${n[Math.floor(Math.random()*n.length)]} ${a[Math.floor(Math.random()*a.length)]};
+}
+async function inicializarCarpetaTmp() {
+  try { await fs.access(CARPETA_TEMPORAL); }
+  catch { await fs.mkdir(CARPETA_TEMPORAL, { recursive: true }); }
 }
 
 // ==================================================
-// 🌐 NAVEGADOR + PROXY MÉXICO
+// 🌐 NAVEGADOR
 // ==================================================
-async function crearNavegador() {
-  const launchOptions = {
+async function crearInstanciaNavegador() {
+  const navegador = await chromium.launch({
+    proxy: PROXY,
     headless: true,
-    args: ['--no-sandbox', '--disable-dev-shm-usage', '--start-maximized']
-  };
-
-  if (PROXY) {
-    launchOptions.proxy = typeof PROXY === 'string' && (PROXY.startsWith('http://') || PROXY.startsWith('https://') || PROXY.startsWith('socks5://'))
-      ? { server: PROXY }
-      : { server: `http://${PROXY}` };
-  }
-
-  const browser = await chromium.launch(launchOptions);
-  const context = await browser.newContext({
-    locale: "es-MX",
-    geolocation: { latitude: 19.4326, longitude: -99.1332 },
-    permissions: ["geolocation"],
-    extraHTTPHeaders: { "Accept-Language": "es-MX,es;q=0.9", "Referer": "https://pay.telcel.com/" }
+    timeout: 60000,
+    args: ['--no-sandbox','--disable-dev-shm-usage','--start-maximized']
   });
-  return { browser, context };
+  const contexto = await navegador.newContext({
+    locale:"es-MX",
+    geolocation:{latitude:19.4326,longitude:-99.1332},
+    viewport:{width:1280,height:800}
+  });
+  return { navegador, contexto };
 }
 
 // ==================================================
-// 🧹 LIMPIEZA TOTAL
+// 🧹 LIMPIEZA
 // ==================================================
-async function limpiarRecursos(idChat, browser, context, page) {
+async function limpiarRecursos(idChat, navegador, contexto, pagina) {
   try {
-    if (page && !page.isClosed()) await page.close({ runBeforeUnload: false }).catch(() => {});
-    if (context) await context.close().catch(() => {});
-    if (browser) await browser.close().catch(() => {});
-    if (idChat) sesiones.delete(idChat);
-    const archivos = await fsPromises.readdir(CARPETA_TMP).catch(() => []);
-    for (const f of archivos) {
-      if (f.endsWith('.png')) await fsPromises.unlink(path.join(CARPETA_TMP, f)).catch(() => {});
-    }
+    if(pagina && !pagina.isClosed()) await pagina.close();
+    if(contexto) await contexto.close();
+    if(navegador) await navegador.close();
+    sesionesActivas.delete(idChat);
   } catch {}
 }
 
 // ==================================================
-// 📱 FLUJO: SELECCIÓN MONTO + ASEGURA CLIC EN CONTINUAR
+// 📱 FLUJO PRINCIPAL (CORREGIDO PARA TU IMAGEN)
 // ==================================================
-async function procesarRecarga(ctx, numero, tarjeta, monto = 200) {
-  const id = ctx.chat.id;
-  let browser, context, page;
-  const INTENTOS_MAX = 3;
+async function ejecutarProcesoRecarga(ctx, numeroTelefono, datosTarjeta, montoSeleccionado = 200) {
+  const idChat = ctx.chat.id;
+  let navegadorActivo, contextoPagina, paginaActual;
+  const INTENTOS_MAXIMOS = 3;
 
-  for (let intento = 1; intento <= INTENTOS_MAX; intento++) {
+  for (let intento = 1; intento <= INTENTOS_MAXIMOS; intento++) {
     try {
-      await ctx.reply(`🔄 RECARGA $${monto} | Intento ${intento}/${INTENTOS_MAX}`);
-      ({ browser, context } = await crearNavegador());
-      page = await context.newPage();
+      await inicializarCarpetaTmp();
+      await ctx.reply(🔄 RECARGA $${montoSeleccionado} | Intento ${intento});
+
+      ({ navegador: navegadorActivo, contexto: contextoPagina } = await crearInstanciaNavegador());
+      paginaActual = await contextoPagina.newPage();
 
       // 1. ABRIR TELCEL
-      await page.goto(URL_TELCEL, { waitUntil: "domcontentloaded", timeout: 40000 });
-      await esperar(1500);
-
-      // Permiso ubicación si aparece
-      const btnPermitir = page.locator('button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar")').first();
-      if (await btnPermitir.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await btnPermitir.click({ force: true }).catch(() => {});
-      }
+      await paginaActual.goto(URL_TELCEL, { waitUntil: "networkidle", timeout: 50000 });
 
       // 2. VER MÁS PAQUETES
-      const btnVerMas = page.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")');
-      await btnVerMas.waitFor({ state: "visible", timeout: 15000 });
-      await btnVerMas.click();
+      const btnVerMas = 'button:has-text("Ver más paquetes")';
+      await paginaActual.waitForSelector(btnVerMas, { state: "visible", timeout: 20000 });
+      await paginaActual.click(btnVerMas);
 
-      // 3. SELECCIONAR PAQUETE ($200 / $300 / $500) ✅ SELECCIÓN POR TEXTO
-      const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
-      const tarjetaPaquete = page.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
-        .filter({ has: page.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
-        .filter({ has: page.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
-
-      await tarjetaPaquete.waitFor({ state: "attached", timeout: 20000 });
-      const conteo = await tarjetaPaquete.count().catch(() => 0);
-      if (conteo === 0) throw new Error(`PAQUETE_$${monto}_NO_ENCONTRADO`);
-
-      const btnLoQuiero = tarjetaPaquete.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")');
-      await btnLoQuiero.scrollIntoViewIfNeeded();
-      await btnLoQuiero.waitFor({ state: "visible", timeout: 15000 });
-      await btnLoQuiero.click();
+      // 3. SELECCIONAR MONTO (200/300/500)
+      const selectorPaquete = div:has-text("$${montoSeleccionado}") + div button:has-text("Lo quiero");
+      await paginaActual.waitForSelector(selectorPaquete, { state: "enabled", timeout: 25000 });
+      await paginaActual.click(selectorPaquete);
+      await paginaActual.waitForLoadState('networkidle');
 
       // 4. NÚMERO TELCEL
-      await page.waitForSelector('h2:has-text("Número celular"), div:has-text("Número celular")', { state: "visible", timeout: 20000 }).catch(() => {});
-      const inputNumero = page.locator('input#id-phone-p');
-      await inputNumero.waitFor({ state: "visible", timeout: 15000 });
-      if (!/^\d{10}$/.test(numero)) throw new Error("Número inválido (10 dígitos)");
-      await inputNumero.fill(numero);
-      await inputNumero.dispatchEvent('input', { bubbles: true }).catch(() => {});
-      await inputNumero.dispatchEvent('change', { bubbles: true }).catch(() => {});
+      await paginaActual.waitForSelector('input[aria-label="Número celular"]', { state: "editable", timeout: 25000 });
+      const inputNumero = 'input[aria-label="Número celular"]';
+      await paginaActual.fill(inputNumero, numeroTelefono);
+      const btnContNum = 'button:has-text("Continuar"):not([disabled])';
+      await paginaActual.waitForSelector(btnContNum, { state: "visible", timeout: 25000 });
+      await paginaActual.click(btnContNum);
 
-      // 5. CONTINUAR NÚMERO
-      const btnContNum = page.locator('button.fontBoldAMX:has-text("Continuar"), button.bg-\\[\\#7b1fa2\\]:has-text("Continuar"), button:has-text("Continuar")').first();
-      await btnContNum.waitFor({ state: "visible", timeout: 20000 });
-      await btnContNum.click({ force: true });
+      // ✅ PASO CLAVE: FORMULARIO PAGO (TAL CUAL TU IMAGEN)
+      await paginaActual.waitForSelector('input[placeholder="Número de tarjeta"]', { state: "editable", timeout: 35000 });
 
-      // 6. FORMULARIO PAGO + 🔑 CLIC SEGURO EN CONTINUAR
-      const inputTarjeta = page.locator('input#creditCardNumber, input[placeholder*="16 dígitos" i], input[placeholder="Número de tarjeta"]').first();
-      await inputTarjeta.waitFor({ state: "visible", timeout: 25000 });
+      // CAMPOS EXACTOS DE TU CAPTURA
+      const inputTarjeta = 'input[placeholder="Número de tarjeta"]';
+      const inputNombre = 'input[placeholder="Nombre completo"]'; // ✅ FIJADO
+      const inputVencimiento = 'input[placeholder="Vencimiento"]';
+      const inputCVV = 'input[placeholder="CVV"]';
+      const btnContinuar = 'button:has-text("Continuar")';
 
-      const inNombre = page.locator('input#creditCardName, input[placeholder*="Nombre completo" i], input[placeholder="Nombre"]').first();
-      const inMes = page.locator('input#month, input.exp[placeholder="MM"], input[placeholder="MM"]').first();
-      const inAnio = page.locator('input#year, input.exp[placeholder="AA"], input[placeholder="AA"]').first();
-      const inFecha = page.locator('input[name="cardExpiry"][placeholder="MM / AA"], input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i]').first();
-      const inCVV = page.locator('input#cvv-input, input[placeholder="000"], input[placeholder="CVV"]').first();
-      const chkTerminos = page.locator('input[type="checkbox"]#terms, input[type="checkbox"][name*="terms" i], label[for*="terms" i]').first();
+      // LLENADO LENTO Y SEGURO
+      await paginaActual.fill(inputTarjeta, datosTarjeta.tarjeta);
+      await esperar(500);
+      
+      const nombreGenerado = generarNombreCompletoAleatorio();
+      await paginaActual.fill(inputNombre, nombreGenerado); // ✅ ASEGURADO
+      await esperar(500);
+      
+      await paginaActual.fill(inputVencimiento, ${datosTarjeta.mes}/${datosTarjeta.anio});
+      await esperar(500);
+      
+      await paginaActual.fill(inputCVV, datosTarjeta.cvv);
+      await esperar(1500); // Espera para que la página valide
 
-      // LLENADO COMPLETO
-      await inputTarjeta.fill(tarjeta.tarjeta, { force: true });
-      if (await inNombre.isVisible().catch(() => false)) {
-        await inNombre.fill(nombreAleatorio(), { force: true });
-      }
+      // ✅ ESPERA CRÍTICA: QUE BOTÓN SE HABILITE (NO MÁS GRIS)
+      await paginaActual.waitForSelector(btnContinuar, { state: "enabled", timeout: 35000 });
+      await paginaActual.waitForSelector(btnContinuar, { state: "visible" });
+      
+      // CLIC FORZADO Y SEGURO
+      await paginaActual.click(btnContinuar, { force: true });
+      await paginaActual.waitForLoadState('networkidle');
 
-      if (await inMes.isVisible().catch(() => false)) {
-        await inMes.fill(tarjeta.mes, { force: true });
-        if (await inAnio.isVisible().catch(() => false)) {
-          await inAnio.fill(tarjeta.anio.slice(-2), { force: true });
-        }
-      } else if (await inFecha.isVisible().catch(() => false)) {
-        await inFecha.fill(`${tarjeta.mes}/${tarjeta.anio.slice(-2)}`, { force: true });
-      }
-
-      if (await inCVV.isVisible().catch(() => false)) {
-        await inCVV.fill(tarjeta.cvv, { force: true });
-      }
-
-      if (await chkTerminos.isVisible().catch(() => false)) {
-        await chkTerminos.check({ force: true }).catch(() => chkTerminos.click({ force: true }));
-      }
-
-      // Forzar validación React de todos los inputs
-      await page.evaluate(() => {
-        document.querySelectorAll('input').forEach(input => {
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-          input.dispatchEvent(new Event('blur', { bubbles: true }));
-        });
-      }).catch(() => {});
-
-      // ⏳ ESPERA CLAVE: DEJA QUE LA PÁGINA ACTIVE EL BOTÓN
-      await esperar(1000);
-      const btnContPago = page.locator('button[type="submit"].bg-\\[\\#7b1fa2\\]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar"), button:has-text("Pagar")').last();
-
-      await page.evaluate(() => {
-        const btns = Array.from(document.querySelectorAll('button'));
-        const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar') || (el.innerText || '').includes('Pagar'));
-        if (b) {
-          b.removeAttribute('disabled');
-          b.style.pointerEvents = 'auto';
-        }
-      }).catch(() => {});
-
-      await btnContPago.waitFor({ state: "visible", timeout: 25000 });
-      await btnContPago.scrollIntoViewIfNeeded().catch(() => {});
-
-      // 🖱️ CLIC FORZADO Y SEGURO
-      await btnContPago.click({ force: true });
-      await esperar(1500);
-
-      // 7. TARJETA FÍSICA (SI APARECE MODAL)
-      const btnFisica = page.locator('button.ModalInvitation_buttonModal__42s7X, button:has-text("Continuar con mi tarjeta física")').first();
-      if (await btnFisica.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await btnFisica.scrollIntoViewIfNeeded().catch(() => {});
-        await btnFisica.click({ force: true }).catch(() => {});
-      }
-
-      // 8. RESULTADO
-      await fsPromises.mkdir(CARPETA_TMP, { recursive: true }).catch(() => {});
-      const rutaCaptura = path.join(CARPETA_TMP, `exito_${id}.png`);
-      await esperar(3000);
-      const captura = await page.screenshot({ fullPage: true, path: rutaCaptura }).catch(() => null);
-
-      if (captura) {
-        await ctx.replyWithPhoto({ source: captura }, {
-          caption: `✅ RECARGA PROCESADA\n📦 Monto: $${monto}\n📱 Número: ${numero}\n💳 Tarjeta: ****${ultimos4(tarjeta.tarjeta)}`
-        });
-      } else {
-        await ctx.reply(`✅ RECARGA PROCESADA\n📦 Monto: $${monto}\n📱 Número: ${numero}\n💳 Tarjeta: ****${ultimos4(tarjeta.tarjeta)}`);
-      }
+      // CAPTURA Y FINALIZACIÓN
+      const captura = await paginaActual.screenshot({ fullPage: true });
+      await ctx.replyWithPhoto({ source: captura }, {
+        caption: ✅ RECARGA LISTA\n📦 $${montoSeleccionado}\n📱 ${numeroTelefono}\n👤 Nombre: ${nombreGenerado}\n💳 ****${obtenerUltimos4(datosTarjeta.tarjeta)}
+      });
       return;
 
-    } catch (error) {
-      await ctx.reply(`⚠️ Intento ${intento} falló: ${error.message.slice(0, 150)}`);
-      if (intento === INTENTOS_MAX) {
-        await ctx.reply(`❌ FALLO TOTAL\n📌 Etapa: Proceso completo\n🔗 URL: ${page?.url() || "No disponible"}`);
-      }
-      await esperar(1500);
-    } finally {
-      await limpiarRecursos(id, browser, context, page);
+    } catch (err) {
+      await ctx.reply(❌ FALLO: ${err.message.slice(0,180)});
+      await limpiarRecursos(idChat, navegadorActivo, contextoPagina, paginaActual);
+      await esperar(2000);
     }
   }
 }
 
 // ==================================================
-// 🤖 COMANDOS TELEGRAM (CON SELECCIÓN DE MONTO)
+// 🤖 COMANDOS TELEGRAM
 // ==================================================
 bot.command('start', async ctx => {
-  await ctx.reply('🤖 BOT TELCEL ACTIVO\n📌 /recarga - Iniciar recarga\n💰 Montos: 200 / 300 / 500');
+  await ctx.reply('🤖 BOT TELCEL ACTIVO\n📌 /recarga - Iniciar\n💰 Montos: 200/300/500');
 });
 
 bot.command('recarga', async ctx => {
-  sesiones.set(ctx.chat.id, { estado: "esperando_datos" });
-  await ctx.reply('📤 ENVÍA:\nFormato: NUMERO|TARJETA|MM|AA|CVV|MONTO\nEjemplo: 5512345678|4111111111111111|12|28|123|200');
+  sesionesActivas.set(ctx.chat.id, { estado: "esperando_datos" });
+  await ctx.reply('📤 FORMATO: NUMERO|TARJETA|MM|AA|CVV|MONTO\nEj: 5512345678|411111|12|28|123|200');
 });
 
 bot.on('text', async ctx => {
   const id = ctx.chat.id;
   const texto = ctx.message.text.trim();
-  if (!sesiones.has(id) || sesiones.get(id).estado !== "esperando_datos") return;
+  if (!sesionesActivas.has(id)) return;
 
   const partes = texto.split('|');
   if (partes.length >= 5) {
-    const [numero, tarjeta, mes, anio, cvv, monto] = partes.map(p => p.trim());
-    const montoFinal = [200, 300, 500].includes(Number(monto)) ? Number(monto) : 200;
-    sesiones.delete(id);
-    await procesarRecarga(ctx, numero, { tarjeta, mes, anio, cvv }, montoFinal);
+    const [num, cc, mes, anio, cvv, monto] = partes.map(p=>p.trim());
+    const montoOk = [200,300,500].includes(Number(monto)) ? Number(monto) : 200;
+    sesionesActivas.delete(id);
+    await ejecutarProcesoRecarga(ctx, num, { tarjeta:cc, mes, anio, cvv }, montoOk);
   } else {
-    await ctx.reply('❌ FORMATO INCORRECTO\nUsa: NUMERO|TARJETA|MM|AA|CVV|MONTO');
+    await ctx.reply('❌ FORMATO MAL');
   }
 });
 
 // ==================================================
 // 🚀 SERVIDOR RENDER
 // ==================================================
-const servidor = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
+const http = require('http');
+const servidor = http.createServer((req,res)=>{
+  res.writeHead(200, {'Content-Type':'text/plain'});
   res.end('✅ BOT ACTIVO');
 });
 
-servidor.listen(PUERTO, '0.0.0.0', () => console.log(`🌐 Puerto ${PUERTO}`));
+servidor.listen(PUERTO, '0.0.0.0', ()=>console.log(🌐 Puerto ${PUERTO}));
 
-bot.launch({ polling: true }).then(() => console.log('🤖 BOT TELEGRAM LISTO'));
+bot.launch({ polling:true }).then(()=>console.log('🤖 BOT LISTO'));
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
+process.once('SIGINT', ()=>bot.stop('SIGINT'));
+process.once('SIGTERM', ()=>bot.stop('SIGTERM'));
