@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build": "npm install && npx playwright install --with-deps chromium"
+    "build": "npm install && npx playwright install chromium"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
