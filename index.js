@@ -19,10 +19,8 @@ const PUERTO = process.env.PORT || 3000;
 const ES_HEADLESS = process.env.HEADLESS === 'true' || Boolean(process.env.RENDER) || process.platform === 'linux';
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8848937586:AAF5ARZdluPDkxtxhmtoay8v7QVD7wTXQ4E';
-const URL_NETFLIX = 'https://netflix.com/mx/';
-const URL_TELCEL = 'https://pay.telcel.com/package/1';
 const MONTO_TELCEL = 200;
-const TIEMPO_MAX_COMANDO = 180000; // 3 minutos límite por proceso para evitar cuelgues
+const TIEMPO_MAX_COMANDO = 240000; // 4 minutos límite por proceso para evitar cuelgues
 const MAX_USUARIOS = 8;
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -632,8 +630,18 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         navegadorTelcel = await chromium.launch({
             headless: ES_HEADLESS,
             proxy: PROXY,
+            timeout: 240000,
             slowMo: 50,
-            args: ['--start-maximized', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage']
+            args: [
+                '--no-sandbox',
+                '--disable-gpu',
+                '--ignore-certificate-errors',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--start-maximized',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--lang=es-MX'
+            ]
         });
         navegadoresActivos.set(id, navegadorTelcel);
 
@@ -644,7 +652,12 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
             viewport: null
         });
 
+        contexto.setDefaultTimeout(240000);
+        contexto.setDefaultNavigationTimeout(240000);
+
         paginaTelcel = await contexto.newPage();
+        paginaTelcel.setDefaultTimeout(240000);
+        paginaTelcel.setDefaultNavigationTimeout(240000);
 
         paginaTelcel.on('close', () => {
             cerradoManualmente = true;
@@ -673,8 +686,14 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
             }
         });
 
-        console.log(`[Telcel Usuario ${id}] 🌐 Abriendo ${URL_TELCEL}...`);
-        await paginaTelcel.goto(URL_TELCEL, { waitUntil: 'domcontentloaded', timeout: 90000 });
+        console.log(`[Telcel Usuario ${id}] 🌐 Abriendo https://pay.telcel.com/package/1...`);
+        try {
+            await paginaTelcel.goto('https://pay.telcel.com/package/1', { waitUntil: 'commit', timeout: 35000 });
+            await paginaTelcel.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+        } catch(eNav) {
+            console.log(`[Telcel Usuario ${id}] ℹ️ Reintentando navegación Telcel...`);
+            await paginaTelcel.goto('https://pay.telcel.com/package/1', { waitUntil: 'load', timeout: 35000 }).catch(() => {});
+        }
         await esperar(500, id, miId, paginaTelcel);
 
         // ✅ AUTO-ACEPTAR: 'Permitir mientras visito el sitio' / 'Aceptar' / 'Permitir'
@@ -1197,11 +1216,15 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         navegador = await chromium.launch({
             headless: ES_HEADLESS,
             proxy: PROXY,
+            timeout: 240000,
             slowMo: 180,
             args: [
+                '--no-sandbox',
+                '--disable-gpu',
+                '--ignore-certificate-errors',
+                '--disable-features=IsolateOrigins,site-per-process',
                 '--start-maximized',
                 '--disable-blink-features=AutomationControlled',
-                '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-infobars',
                 '--disable-dev-shm-usage',
@@ -1216,7 +1239,12 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
         });
 
+        contexto.setDefaultTimeout(240000);
+        contexto.setDefaultNavigationTimeout(240000);
+
         pagina = await contexto.newPage();
+        pagina.setDefaultTimeout(240000);
+        pagina.setDefaultNavigationTimeout(240000);
 
         // 🛡️ MÁSCARA ANTI-DETECCIÓN AVANZADA
         await pagina.addInitScript(() => {
@@ -1309,8 +1337,14 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 🌐 2. CARGAR NETFLIX
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        console.log(`[Usuario ${usuarioId}] 🌐 Cargando Netflix...`);
-        await pagina.goto(URL_NETFLIX, { timeout: 90000, waitUntil: 'domcontentloaded' });
+        console.log(`[Usuario ${usuarioId}] 🌐 Cargando https://netflix.com/mx/...`);
+        try {
+            await pagina.goto('https://netflix.com/mx/', { timeout: 35000, waitUntil: 'commit' });
+            await pagina.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+        } catch(eNav) {
+            console.log(`[Usuario ${usuarioId}] ℹ️ Reintentando navegación Netflix...`);
+            await pagina.goto('https://netflix.com/mx/', { timeout: 35000, waitUntil: 'load' }).catch(() => {});
+        }
         await esperar(3000, usuarioId, miId);
         await revisarError();
 
@@ -1698,22 +1732,4 @@ process.once('SIGINT', () => {
 process.once('SIGTERM', () => {
     console.log('🛑 Recibido SIGTERM, cerrando bot...');
     bot.stop('SIGTERM');
-    process.exit(0);
-});
-
-function iniciarBotTelegram() {
-    bot.launch({
-        dropPendingUpdates: true,
-        polling: {
-            timeout: 3000
-        }
-    })
-    .then(() => console.log(`✅ Bot corriendo en puerto ${PUERTO} | Proxy: MÉXICO 🇲🇽 (Capacidad: 8 concurrentes)`))
-    .catch(err => {
-        console.error("⚠️ Fallo en conexión de Telegram. Reintentando en 2 segundos...", err.message || err);
-        setTimeout(iniciarBotTelegram, 2000);
-    });
-}
-
-iniciarBotTelegram();
 
