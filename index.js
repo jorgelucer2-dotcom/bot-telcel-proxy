@@ -1,8 +1,5 @@
-
 'use strict';
 
-process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '/opt/render/.cache/ms-playwright';
-process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '0';
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 const http = require('http');
@@ -1763,3 +1760,4 @@ function iniciarBotTelegram() {
 }
 
 iniciarBotTelegram();
+
