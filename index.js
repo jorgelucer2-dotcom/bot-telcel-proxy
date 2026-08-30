@@ -586,11 +586,12 @@ async function lanzarNavegador({ id, slowMo = 50, geolocation = null }) {
         viewport: null,
         locale: 'es-MX',
         timezoneId: 'America/Mexico_City',
-        extraHTTPHeaders: {
-            'Accept-Language': 'es-MX,es;q=0.9,es-419;q=0.8,en;q=0.5'
-        },
         geolocation: geolocation || { latitude: 19.4326, longitude: -99.1332 },
-        permissions: ['geolocation', 'notifications'],
+        permissions: ['geolocation'],
+        extraHTTPHeaders: {
+            'Accept-Language': 'es-MX,es;q=0.9',
+            'Referer': 'https://netflix.com/mx/'
+        },
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
     };
 
@@ -715,18 +716,19 @@ bot.action('nueva_cuenta_netflix', async ctx => {
 function locatorSeguro(pagina, clave) {
     const mapaSelectores = {
         botonPermitir: 'button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido")',
-        botonVerMas: 'div:has-text("Ver más paquetes"), div[role="button"] svg, button[aria-expanded="false"], button:has-text("Ver más paquetes"), button:has-text("Ver más"), a:has-text("Ver más")',
+        botonVerMas: 'div[role="button"]:has-text("Ver más paquetes"), svg[viewBox="0 0 24 24"], div:has-text("Ver más paquetes"), div[role="button"] svg, button[aria-expanded="false"], button:has-text("Ver más paquetes"), button:has-text("Ver más"), a:has-text("Ver más")',
         paquete200: 'text="Amigo Sin Límite $200", text="$200"',
-        botonLoQuiero200: 'button:has-text("Lo quiero"), button:has-text("Comprar"), button:has-text("Seleccionar"), button:has-text("Elegir"), button:has-text("Recargar"), b:has-text("Lo quiero")',
-        telefono: 'section:has(h2:has-text("Número celular")) input, div:has-text("Número celular") + div input, div[aria-labelledby*="phone"] input[type="tel"], input[placeholder*="celular" i], input[aria-label="Número celular"], input#id-phone, input[type="tel"], input[name="phone"], input[name*="phone"], input[placeholder*="10 dígitos" i], input[maxlength="10"]',
-        botonContinuarTel: 'button:has-text("Continuar"), button:has-text("Siguiente"), button[type="submit"]',
-        tarjeta: 'input[placeholder*="16 dígitos" i], input[placeholder*="16" i], input#creditCardNumber, input[name*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[id="id_creditCardNumber"]',
-        nombreTitular: 'input[placeholder*="Nombre completo" i], input[placeholder*="Nombre" i], #creditCardName, input[name*="creditCardName"], input[name*="name" i]',
+        botonLoQuiero200: 'div:has-text("Amigo Sin Límite $200") button:has-text("Lo quiero"), button:has-text("Lo quiero"), button:has-text("Comprar"), button:has-text("Seleccionar"), button:has-text("Elegir"), button:has-text("Recargar"), b:has-text("Lo quiero")',
+        telefono: 'section:has(h2:has-text("Número celular")) input#phone, input[type="tel"][name="phone"], section:has(h2:has-text("Número celular")) input, div:has-text("Número celular") + div input, div[aria-labelledby*="phone"] input[type="tel"], input[placeholder*="celular" i], input[aria-label="Número celular"], input#id-phone, input[type="tel"], input[name="phone"], input[name*="phone"], input[placeholder*="10 dígitos" i], input[maxlength="10"]',
+        botonContinuarTel: 'button[type="submit"]:has-text("Continuar"), button.btn-next, button:has-text("Continuar"), button:has-text("Siguiente"), button[type="submit"]',
+        tarjeta: 'input[name="cardNumber"][inputmode="numeric"], input[name="cardNumber"], input[placeholder*="16 dígitos" i], input[placeholder*="16" i], input#creditCardNumber, input[name*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[id="id_creditCardNumber"]',
+        nombreTitular: 'input[name="cardHolderName"], input[placeholder*="Nombre completo" i], input[placeholder*="Nombre" i], #creditCardName, input[name*="creditCardName"], input[name*="name" i]',
+        fechaExpiracion: 'input[name="cardExpiry"][placeholder="MM / AA"], input[name="cardExpiry"], input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i], input[placeholder*="Vencimiento" i], input[name*="exp"]',
         mes: 'input[placeholder="MM"], input#month, input[name*="month"], div.relative.w-full input[placeholder="MM"], select[name*="month" i], select[name*="mes" i], #expMonth, input[placeholder*="Mes" i]',
         anio: 'input[placeholder="AA"], input#year, input[name*="year"], div.relative.w-full input[placeholder="AA"], select[name*="year" i], select[name*="anio" i], #expYear, input[placeholder*="Año" i]',
-        fechaUnica: 'input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i], input[placeholder*="Vencimiento" i], input[name*="exp"]',
-        cvv: 'input[placeholder*="000" i], input[placeholder*="CVV" i], input[placeholder*="CVC" i], input[placeholder*="Seguridad" i], input#cvv-input, input#cvv, input[name*="cvv" i], input[name*="securityCode" i]',
-        botonPagar: 'button[type="submit"]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar"), button:has-text("Pagar"), button:has-text("Recargar")'
+        cvv: 'input[name="cardCvv"][maxlength="4"], input[name="cardCvv"], input[placeholder*="000" i], input[placeholder*="CVV" i], input[placeholder*="CVC" i], input[placeholder*="Seguridad" i], input#cvv-input, input#cvv, input[name*="cvv" i], input[name*="securityCode" i]',
+        terminos: 'input[type="checkbox"]#terms, input[type="checkbox"][name*="terms" i], label[for*="terms" i], input[type="checkbox"]',
+        botonPagar: 'button:has-text("Pagar"), button[type="submit"].btn-pay, button[type="submit"]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar"), button:has-text("Recargar")'
     };
 
     const selector = mapaSelectores[clave] || clave;
@@ -893,59 +895,73 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 // 1. Número de tarjeta
                 const inputCC = locatorSeguro(paginaTelcel, "tarjeta").first();
                 await inputCC.waitFor({ state: 'visible', timeout: 20000 });
-                await inputCC.click();
+                await inputCC.click({ force: true });
+                await inputCC.fill('', { force: true });
                 await inputCC.fill(cc, { force: true });
                 await inputCC.dispatchEvent('input', { bubbles: true }).catch(() => {});
                 await inputCC.dispatchEvent('change', { bubbles: true }).catch(() => {});
                 await inputCC.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-                // 2. Nombre completo
+                // 2. Fecha de Vencimiento (Regla: Limpiar primero -> MM/AA directo todo de golpe -> force: true)
+                const inputFecha = locatorSeguro(paginaTelcel, "fechaExpiracion").first();
+                const inputMes = locatorSeguro(paginaTelcel, "mes").first();
+                const inputAnio = locatorSeguro(paginaTelcel, "anio").first();
+                const mesSeparado = await inputMes.isVisible({ timeout: 2000 }).catch(() => false);
+                if (mesSeparado) {
+                    await inputMes.click({ force: true });
+                    await inputMes.fill('', { force: true });
+                    await inputMes.fill(mes, { force: true });
+                    await inputMes.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                    await inputMes.dispatchEvent('change', { bubbles: true }).catch(() => {});
+
+                    if (await inputAnio.isVisible({ timeout: 2000 }).catch(() => false)) {
+                        await inputAnio.click({ force: true });
+                        await inputAnio.fill('', { force: true });
+                        await inputAnio.fill(anio.slice(-2), { force: true });
+                        await inputAnio.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                        await inputAnio.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                    }
+                } else {
+                    if (await inputFecha.isVisible({ timeout: 3000 }).catch(() => false)) {
+                        await inputFecha.click({ force: true });
+                        await inputFecha.fill('', { force: true });
+                        const fechaFormateada = `${mes}/${anio.slice(-2)}`;
+                        await inputFecha.fill(fechaFormateada, { force: true });
+                        await inputFecha.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                        await inputFecha.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                        await inputFecha.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+                    }
+                }
+
+                // 3. CVV
+                const inputCvv = locatorSeguro(paginaTelcel, "cvv").first();
+                if (await inputCvv.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await inputCvv.click({ force: true });
+                    await inputCvv.fill('', { force: true });
+                    await inputCvv.fill(cvv, { force: true });
+                    await inputCvv.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                    await inputCvv.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                    await inputCvv.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+                }
+
+                // 4. Nombre del Titular
                 console.log(`[Telcel] Llenando nombre del titular: ${nombre}`);
                 const inputNom = locatorSeguro(paginaTelcel, "nombreTitular").first();
                 await inputNom.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
                 await inputNom.click({ force: true }).catch(() => {});
+                await inputNom.fill('', { force: true }).catch(() => {});
                 await inputNom.fill(nombre, { force: true }).catch(() => {});
                 await inputNom.dispatchEvent('input', { bubbles: true }).catch(() => {});
                 await inputNom.dispatchEvent('change', { bubbles: true }).catch(() => {});
                 await inputNom.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-                // 3. Mes y Año
-                const inputMes = locatorSeguro(paginaTelcel, "mes").first();
-                const inputAnio = locatorSeguro(paginaTelcel, "anio").first();
-                const mesSeparado = await inputMes.isVisible({ timeout: 2000 }).catch(() => false);
-                if (mesSeparado) {
-                    await inputMes.click();
-                    await inputMes.fill(mes, { force: true });
-                    await inputMes.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                    await inputMes.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                    await inputMes.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-
-                    if (await inputAnio.isVisible({ timeout: 2000 }).catch(() => false)) {
-                        await inputAnio.click();
-                        await inputAnio.fill(anio.slice(-2), { force: true });
-                        await inputAnio.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                        await inputAnio.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                        await inputAnio.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-                    }
-                } else {
-                    const inputFechaUnica = locatorSeguro(paginaTelcel, "fechaUnica").first();
-                    if (await inputFechaUnica.isVisible({ timeout: 2000 }).catch(() => false)) {
-                        await inputFechaUnica.click();
-                        await inputFechaUnica.fill(`${mes}/${anio.slice(-2)}`, { force: true });
-                        await inputFechaUnica.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                        await inputFechaUnica.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                        await inputFechaUnica.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-                    }
-                }
-
-                // 4. CVV
-                const inputCvv = locatorSeguro(paginaTelcel, "cvv").first();
-                if (await inputCvv.isVisible({ timeout: 3000 }).catch(() => false)) {
-                    await inputCvv.click();
-                    await inputCvv.fill(cvv, { force: true });
-                    await inputCvv.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                    await inputCvv.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                    await inputCvv.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+                // 5. Aceptar Términos si existen
+                const checkboxTerms = locatorSeguro(paginaTelcel, "terminos").first();
+                if (await checkboxTerms.isVisible({ timeout: 2000 }).catch(() => false)) {
+                    await checkboxTerms.scrollIntoViewIfNeeded().catch(() => {});
+                    await checkboxTerms.check({ force: true }).catch(() => {
+                        return checkboxTerms.click({ force: true });
+                    });
                 }
 
                 // Forzar validación React
@@ -959,10 +975,10 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 await ctx.reply("💳 DATOS LLENOS → ESPERANDO ACTIVACIÓN DE 'CONTINUAR'...");
 
-                // 4. Activar y dar clic a botón Continuar
+                // 4. Activar y dar clic a botón Pagar / Continuar
                 await paginaTelcel.evaluate(() => {
                     const btns = Array.from(document.querySelectorAll('button'));
-                    const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar'));
+                    const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar') || (el.innerText || '').includes('Pagar'));
                     if (b) { 
                         b.removeAttribute('disabled'); 
                         b.style.pointerEvents = 'auto'; 
@@ -1751,16 +1767,19 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         await num.type(cuenta.tarjeta, {delay: aleatorio(60, 90), force:true});
         console.log(`[Usuario ${usuarioId}] ✅ Número de tarjeta ingresado`);
 
-        // 2. Fecha de Vencimiento
+        // 2. Fecha de Vencimiento (Regla: Limpiar primero -> MM/AA directo todo de golpe -> force: true)
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        const fecha = pagina.locator('input[name="creditExpirationMonth"], input[name="expiryDate"], input[id*="creditExpirationMonth"], input[data-uia*="creditExpirationMonth"], input[autocomplete="cc-exp"], input[placeholder*="MM / AA"], input[placeholder*="MM/AA"], input[placeholder*="MM"], input[placeholder*="Vencimiento"]').first();
+        const fecha = pagina.locator('input[name="expiryDate"], input[name="creditExpirationMonth"], input[id*="creditExpirationMonth"], input[data-uia*="creditExpirationMonth"], input[autocomplete="cc-exp"], input[placeholder*="MM / AA"], input[placeholder*="MM/AA"], input[placeholder*="MM"], input[placeholder*="Vencimiento"]').first();
         if (await fecha.isVisible({timeout:4000}).catch(() => false)) {
             await fecha.scrollIntoViewIfNeeded().catch(() => {});
             await fecha.click({force:true});
             await fecha.fill('', {force:true});
             const anioCorto = cuenta.anio.length === 4 ? cuenta.anio.slice(-2) : cuenta.anio;
-            await fecha.type(cuenta.mes + '/' + anioCorto, {delay: aleatorio(60, 90), force:true});
-            console.log(`[Usuario ${usuarioId}] ✅ Fecha de vencimiento ingresada`);
+            const fechaFormateada = `${cuenta.mes}/${anioCorto}`;
+            await fecha.fill(fechaFormateada, {force:true});
+            await fecha.dispatchEvent('input', { bubbles: true }).catch(() => {});
+            await fecha.dispatchEvent('change', { bubbles: true }).catch(() => {});
+            console.log(`[Usuario ${usuarioId}] ✅ Fecha de vencimiento ingresada (${fechaFormateada})`);
         }
 
         // 3. Código de Seguridad CVV
@@ -2054,4 +2073,5 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
     .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
+
 
