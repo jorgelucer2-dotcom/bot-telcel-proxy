@@ -16,7 +16,7 @@ const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
 const URL_NETFLIX = process.env.URL_NETFLIX || 'https://www.netflix.com/mx/';
 const MONTO_TELCEL = 200;
 const TIEMPO_MAX_COMANDO = 240000; // 4 minutos límite por proceso para evitar cuelgues
-const MAX_USUARIOS = 8;
+const MAX_USUARIOS = 2; // 🎯 Límite de 2 procesos simultáneos para evitar saturación de memoria
 
 const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
 
@@ -31,6 +31,19 @@ process.on('unhandledRejection', err => {
     console.error('💥 Promesa rechazada (Bot sigue vivo):', (err.message || err).toString().slice(0, 140));
 });
 
+// 🧼 CIERRE TOTAL Y LIBERACIÓN DE MEMORIA (100% LIMPIO)
+async function cerrarSesion(sesion) {
+    if (!sesion) return;
+    try { await sesion.pagina?.close({ runBeforeUnload: false }).catch(() => {}); } catch(e){}
+    try { await sesion.ctx?.close().catch(() => {}); } catch(e){}
+    try { await sesion.nav?.close().catch(() => {}); } catch(e){}
+    // 🧼 LIMPIEZA TOTAL PARA NO ACUMULAR MEMORIA
+    delete sesion.pagina;
+    delete sesion.ctx;
+    delete sesion.nav;
+    global.gc?.(); // Forzar recolección de basura si está disponible
+}
+
 async function limpiarRecursosTotales() {
     for (const [uid, nav] of navegadoresActivos.entries()) {
         try {
@@ -38,6 +51,7 @@ async function limpiarRecursosTotales() {
         } catch(e) {}
     }
     navegadoresActivos.clear();
+    global.gc?.();
 }
 
 // Mapas independientes por usuario (Multi-usuario real con aislamiento total)
@@ -46,7 +60,7 @@ const sesionesUsuario = sesiones.netflix; // Alias para compatibilidad con flujo
 const navegadoresActivos = new Map();
 const ejecucionesUsuario = new Map();
 
-// 🧹 Verificar cupo concurrente (Máximo 8)
+// 🧹 Verificar cupo concurrente (Máximo 2 simultáneos en plan gratuito)
 function tieneCupo(id) {
     if (navegadoresActivos.has(id) || sesiones.recarga.has(id) || sesiones.netflix.has(id)) {
         return true;
@@ -83,6 +97,9 @@ async function liberarUsuario(id, ctx) {
     if (sesiones.netflix) sesiones.netflix.delete(id);
     sesionesUsuario.delete(id);
     ejecucionesUsuario.delete(id);
+
+    // 🧼 Forzar recolección de basura si está disponible
+    global.gc?.();
 
     console.log(`[Usuario ${id}] 🔓 Sesión y procesos liberados al 100%.`);
 }
@@ -545,17 +562,15 @@ bot.action(['cancelarNetflix', 'cancelaNetflix'], async ctx => {
 async function lanzarNavegador({ id, slowMo = 50, geolocation = null }) {
     console.log("🌐 Abriendo navegador...");
     const argsBase = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-gpu",
-        "--disable-dev-shm-usage",
-        "--disable-web-security",
-        "--disable-blink-features=AutomationControlled",
-        "--start-maximized",
-        "--disable-infobars",
-        "--ignore-certificate-errors",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--lang=es-MX"
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage', // 🎯 CLAVE EN RENDER / CONTENEDORES
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-plugins',
+        '--disable-web-security',
+        '--disable-blink-features=AutomationControlled',
+        '--lang=es-MX'
     ];
 
     const navegador = await chromium.launch({
@@ -662,6 +677,7 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
 });
 
 // 🔄 HANDLER PARA NUEVA RECARGA
+// 🔄 HANDLER PARA NUEVA RECARGA
 bot.action('nueva_recarga_telcel', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
@@ -695,467 +711,391 @@ bot.action('nueva_cuenta_netflix', async ctx => {
     );
 });
 
+// 🎯 MAPEO CENTRALIZADO Y SEGURO DE SELECTORES (AUTOPROTECCIÓN)
+function locatorSeguro(pagina, clave) {
+    const mapaSelectores = {
+        botonPermitir: 'button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido")',
+        botonVerMas: 'div:has-text("Ver más paquetes"), div[role="button"] svg, button[aria-expanded="false"], button:has-text("Ver más paquetes"), button:has-text("Ver más"), a:has-text("Ver más")',
+        paquete200: 'text="Amigo Sin Límite $200", text="$200"',
+        botonLoQuiero200: 'button:has-text("Lo quiero"), button:has-text("Comprar"), button:has-text("Seleccionar"), button:has-text("Elegir"), button:has-text("Recargar"), b:has-text("Lo quiero")',
+        telefono: 'section:has(h2:has-text("Número celular")) input, div:has-text("Número celular") + div input, div[aria-labelledby*="phone"] input[type="tel"], input[placeholder*="celular" i], input[aria-label="Número celular"], input#id-phone, input[type="tel"], input[name="phone"], input[name*="phone"], input[placeholder*="10 dígitos" i], input[maxlength="10"]',
+        botonContinuarTel: 'button:has-text("Continuar"), button:has-text("Siguiente"), button[type="submit"]',
+        tarjeta: 'input[placeholder*="16 dígitos" i], input[placeholder*="16" i], input#creditCardNumber, input[name*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[id="id_creditCardNumber"]',
+        nombreTitular: 'input[placeholder*="Nombre completo" i], input[placeholder*="Nombre" i], #creditCardName, input[name*="creditCardName"], input[name*="name" i]',
+        mes: 'input[placeholder="MM"], input#month, input[name*="month"], div.relative.w-full input[placeholder="MM"], select[name*="month" i], select[name*="mes" i], #expMonth, input[placeholder*="Mes" i]',
+        anio: 'input[placeholder="AA"], input#year, input[name*="year"], div.relative.w-full input[placeholder="AA"], select[name*="year" i], select[name*="anio" i], #expYear, input[placeholder*="Año" i]',
+        fechaUnica: 'input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i], input[placeholder*="Vencimiento" i], input[name*="exp"]',
+        cvv: 'input[placeholder*="000" i], input[placeholder*="CVV" i], input[placeholder*="CVC" i], input[placeholder*="Seguridad" i], input#cvv-input, input#cvv, input[name*="cvv" i], input[name*="securityCode" i]',
+        botonPagar: 'button[type="submit"]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar"), button:has-text("Pagar"), button:has-text("Recargar")'
+    };
+
+    const selector = mapaSelectores[clave] || clave;
+    return pagina.locator(selector);
+}
+
+// 🧼 LIMPIEZA TOTAL Y REINICIO (AUTOPROTECCIÓN DE MEMORIA)
+async function limpiarTodoYReiniciar(id, ctx, sesion = null) {
+    if (sesion) {
+        await cerrarSesion(sesion).catch(() => {});
+    }
+    await liberarUsuario(id, ctx).catch(() => {});
+    global.gc?.();
+}
+
+// 🔄 ENVOLTORIO DE EJECUCIÓN CON REINTENTO AUTOMÁTICO (HASTA 3 INTENTOS)
+async function ejecutarConReintento(fn, intentosMax = 3, id, ctx) {
+    let ultimoError = null;
+    for (let intento = 1; intento <= intentosMax; intento++) {
+        try {
+            console.log(`[AutoProtección Usuario ${id}] 🔄 Ejecución intento ${intento}/${intentosMax}`);
+            return await fn(intento);
+        } catch (error) {
+            ultimoError = error;
+            console.error(`[AutoProtección Usuario ${id}] ⚠️ Fallo en intento ${intento}/${intentosMax}:`, error.message || error);
+            if (intento < intentosMax) {
+                await ctx.reply(`⚠️ Reintentando operación (${intento}/${intentosMax}) con navegador limpio...`).catch(() => {});
+                await limpiarTodoYReiniciar(id, ctx);
+                await esperar(2000, id);
+            }
+        }
+    }
+    throw ultimoError;
+}
+
 async function flujoTelcelIndependiente(ctx, id, datos) {
     const { numero, cc, mes, anio, cvv, nombre } = datos;
-    const miId = (ejecucionesUsuario.get(id) || 0) + 1;
-    ejecucionesUsuario.set(id, miId);
-
-    let navegadorTelcel = null;
-    let contexto = null;
-    let paginaTelcel = null;
-    let cerradoManualmente = false;
 
     try {
-        // ⚡ LANZAMIENTO LIMPIO Y DIRECTO (SIN PROXY)
-        const sesionNav = await lanzarNavegador({
-            id,
-            slowMo: 50,
-            geolocation: { latitude: 19.4326, longitude: -99.1332 }
-        });
-        navegadorTelcel = sesionNav.navegador;
-        contexto = sesionNav.contexto;
-        paginaTelcel = sesionNav.pagina;
+        await ejecutarConReintento(async (intento) => {
+            const miId = (ejecucionesUsuario.get(id) || 0) + 1;
+            ejecucionesUsuario.set(id, miId);
 
-        paginaTelcel.on('close', () => {
-            cerradoManualmente = true;
-            console.log(`[Telcel Usuario ${id}] ⚠️ Pestaña cerrada.`);
-        });
+            let navegadorTelcel = null;
+            let contexto = null;
+            let paginaTelcel = null;
+            let cerradoManualmente = false;
 
-        navegadorTelcel.on('disconnected', () => {
-            cerradoManualmente = true;
-            console.log(`[Telcel Usuario ${id}] ⚠️ Navegador desconectado/cerrado.`);
-        });
+            try {
+                // ⚡ LANZAMIENTO LIMPIO Y DIRECTO
+                const sesionNav = await lanzarNavegador({
+                    id,
+                    slowMo: 50,
+                    geolocation: { latitude: 19.4326, longitude: -99.1332 }
+                });
+                navegadorTelcel = sesionNav.navegador;
+                contexto = sesionNav.contexto;
+                paginaTelcel = sesionNav.pagina;
 
-        // 📍 ACEPTAR DIÁLOGOS Y POPUPS DE UBICACIÓN INMEDIATAMENTE
-        paginaTelcel.on('dialog', async dialog => {
-            await dialog.accept().catch(() => {});
-        });
-
-        paginaTelcel.on('popup', async popup => {
-            const btn = popup.locator('button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar")').first();
-            if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-                await btn.click({ force: true }).catch(() => {});
-            }
-        });
-
-        // 🌐 NAVEGACIÓN A TELCEL CON DETECCIÓN DE BLOQUEO
-        console.log(`[Telcel Usuario ${id}] 🌐 Abriendo ${URL_TELCEL}...`);
-        await navegarSeguro(paginaTelcel, URL_TELCEL, navegadorTelcel);
-        navegadorTelcel = sesionNav.navegador;
-        contexto = sesionNav.contexto;
-        paginaTelcel = sesionNav.pagina;
-
-        await esperar(500, id, miId, paginaTelcel);
-
-        // ✅ AUTO-ACEPTAR: 'Permitir mientras visito el sitio' / 'Aceptar' / 'Permitir'
-        const btnPermitir = paginaTelcel.locator('button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido")').first();
-        if (await btnPermitir.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await btnPermitir.click({ force: true }).catch(() => {});
-            console.log("📍 Permiso de ubicación aceptado automáticamente");
-            await ctx.reply("📍 Permiso de ubicación aceptado");
-            await esperar(400, id, miId);
-        }
-
-        // 1. 🔍 BÚSQUEDA Y SELECCIÓN ESTRICTA DEL PAQUETE $200
-        console.log(`[Telcel Usuario ${id}] 🔍 Buscando y seleccionando Paquete $200...`);
-        const selectorTel = 'input#id-phone, input[type="tel"], input[placeholder*="número" i], input[placeholder*="Ingresa" i], input[name="phone"], input[name*="phone"]';
-        const telDirecto = paginaTelcel.locator(selectorTel).first();
-
-        // 1.1 Si existe botón "Ver más paquetes", hacer clic para desplegarlos todos
-        const btnVerMas = paginaTelcel.locator('button:has-text("Ver más paquetes"), button:has-text("Ver más"), p:has-text("Ver más paquetes"), a:has-text("Ver más paquetes"), a:has-text("Ver más")').first();
-        if (await btnVerMas.isVisible({ timeout: 2500 }).catch(() => false)) {
-            await btnVerMas.scrollIntoViewIfNeeded().catch(() => {});
-            await btnVerMas.click({ force: true }).catch(() => {});
-            console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes'`);
-            await esperar(800, id, miId);
-        }
-
-        let selecciono200 = false;
-        for (let intento = 0; intento < 5; intento++) {
-            if (miId !== ejecucionesUsuario.get(id)) throw new Error("PROCESO_REINICIADO");
-
-            // Scroll gradual para cargar y hacer visible la tarjeta de $200
-            await paginaTelcel.evaluate((i) => window.scrollTo(0, i * 250), intento);
-            await esperar(400, id, miId);
-
-            // Búsqueda específica y estricta en el DOM de la tarjeta que contiene $200
-            selecciono200 = await paginaTelcel.evaluate(() => {
-                const elementos = Array.from(document.querySelectorAll('div, section, article, li'));
-                
-                // Encontrar la tarjeta específica que tenga $200 y el botón 'Lo quiero'
-                const card200 = elementos.find(el => {
-                    const txt = (el.innerText || '');
-                    const tiene200 = txt.includes('$200') || (txt.includes('200') && (txt.includes('Amigo') || txt.includes('Paquete') || txt.includes('Sin Límite') || txt.includes('30 días') || txt.includes('MB') || txt.includes('GB')));
-                    const tieneBoton = txt.includes('Lo quiero') || txt.includes('Comprar') || txt.includes('Seleccionar');
-                    return tiene200 && tieneBoton && el.children.length < 15;
+                paginaTelcel.on('close', () => {
+                    cerradoManualmente = true;
+                    console.log(`[Telcel Usuario ${id}] ⚠️ Pestaña cerrada.`);
                 });
 
-                if (card200) {
-                    const btn = card200.querySelector('button, a, [role="button"], b, div[class*="btn"], div[class*="button"]');
-                    if (btn) {
-                        btn.scrollIntoView({ block: 'center' });
-                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
-                            btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
-                        });
-                        if (typeof btn.click === 'function') btn.click();
-                        return true;
+                navegadorTelcel.on('disconnected', () => {
+                    cerradoManualmente = true;
+                    console.log(`[Telcel Usuario ${id}] ⚠️ Navegador desconectado/cerrado.`);
+                });
+
+                paginaTelcel.on('dialog', async dialog => {
+                    await dialog.accept().catch(() => {});
+                });
+
+                paginaTelcel.on('popup', async popup => {
+                    const btn = popup.locator('button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar")').first();
+                    if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                        await btn.click({ force: true }).catch(() => {});
+                    }
+                });
+
+                // 🌐 NAVEGACIÓN A TELCEL CON DETECCIÓN DE BLOQUEO
+                console.log(`[Telcel Usuario ${id}] 🌐 Abriendo ${URL_TELCEL}...`);
+                await navegarSeguro(paginaTelcel, URL_TELCEL, navegadorTelcel);
+
+                await esperar(500, id, miId, paginaTelcel);
+
+                // ✅ Permiso ubicación usando locatorSeguro
+                const btnPermitir = locatorSeguro(paginaTelcel, "botonPermitir").first();
+                if (await btnPermitir.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await btnPermitir.click({ force: true }).catch(() => {});
+                    console.log("📍 Permiso de ubicación aceptado automáticamente");
+                    await ctx.reply("📍 Permiso de ubicación aceptado");
+                    await esperar(400, id, miId);
+                }
+
+                // 1) 🔍 DESPLEGAR Y SELECCIONAR PAQUETE $200
+                console.log(`[Telcel Usuario ${id}] 🔍 Desplegando lista de paquetes...`);
+                const botonVerMas = locatorSeguro(paginaTelcel, "botonVerMas").first();
+                if (await botonVerMas.isVisible({ timeout: 5000 }).catch(() => false)) {
+                    await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
+                    await botonVerMas.click({ force: true }).catch(() => {});
+                    console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes'`);
+                }
+                await paginaTelcel.waitForSelector('text="Amigo Sin Límite $200", text="$200"', { timeout: 40000 }).catch(() => {});
+                await esperar(1500, id, miId);
+
+                // Búsqueda y clic en paquete $200
+                console.log(`[Telcel Usuario ${id}] 🔍 Seleccionando Paquete $200...`);
+                const card200Loc = paginaTelcel.locator('div, section, article, li, mat-card').filter({ hasText: '200' });
+                const btn200Loc = card200Loc.locator('button, a, [role="button"], b').filter({ hasText: /lo quiero|comprar|elegir|recargar/i }).first();
+                if (await btn200Loc.isVisible({ timeout: 4000 }).catch(() => false)) {
+                    await btn200Loc.scrollIntoViewIfNeeded().catch(() => {});
+                    await btn200Loc.click({ force: true, timeout: 5000 }).catch(() => {});
+                    console.log(`[Telcel Usuario ${id}] ✅ Clic en botón 'Lo quiero' de $200`);
+                } else {
+                    await paginaTelcel.evaluate(() => {
+                        const elementos = Array.from(document.querySelectorAll('*'));
+                        const nodos200 = elementos.filter(el => (el.innerText || '').includes('Amigo Sin Límite $200') || (el.innerText || '').includes('$200'));
+                        for (const nodo of nodos200.reverse()) {
+                            const btn = nodo.querySelector('button, a, [role="button"], b, div[class*="btn"]') ||
+                                        nodo.closest('div, section, article, li')?.querySelector('button, a, [role="button"], b, div[class*="btn"]');
+                            if (btn && (btn.innerText || '').toLowerCase().includes('quiero')) {
+                                btn.scrollIntoView({ block: 'center' });
+                                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+                                    btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+                                });
+                                if (typeof btn.click === 'function') btn.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }).catch(() => false);
+                }
+
+                await ctx.reply("✅ PAQUETE $200 SELECCIONADO");
+
+                // 2) 📱 SELECTOR ACTUALIZADO DEL NÚMERO TELEFÓNICO CON locatorSeguro
+                const campoTel = locatorSeguro(paginaTelcel, "telefono").first();
+                try {
+                    await campoTel.waitFor({ state: "visible", timeout: 35000 });
+                } catch(eWaitTel) {
+                    console.error(`[Telcel Diagnóstico] Timeout en campo teléfono. URL: ${paginaTelcel.url()} | Título: ${await paginaTelcel.title().catch(() => '')}`);
+                    throw eWaitTel;
+                }
+
+                await campoTel.click({ force: true });
+                await campoTel.fill(numero, { force: true });
+                await campoTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                await campoTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                await campoTel.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+
+                // Clic en Continuar del teléfono
+                const btnContinuarTel = locatorSeguro(paginaTelcel, "botonContinuarTel").first();
+                if (await btnContinuarTel.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await btnContinuarTel.click({ force: true }).catch(() => {});
+                } else {
+                    await paginaTelcel.getByRole('button', { name: /continuar|siguiente/i }).first().click({ force: true }).catch(() => {});
+                }
+                await ctx.reply("📱 NÚMERO INGRESADO");
+
+                // 3) ⚡ CAPTURA EXACTA DE TARJETA CON locatorSeguro
+                await ctx.reply("📝 Llenando datos de tarjeta...");
+
+                // 1. Número de tarjeta
+                const inputCC = locatorSeguro(paginaTelcel, "tarjeta").first();
+                await inputCC.waitFor({ state: 'visible', timeout: 20000 });
+                await inputCC.click();
+                await inputCC.fill(cc, { force: true });
+                await inputCC.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                await inputCC.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                await inputCC.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+
+                // 2. Nombre completo
+                console.log(`[Telcel] Llenando nombre del titular: ${nombre}`);
+                const inputNom = locatorSeguro(paginaTelcel, "nombreTitular").first();
+                await inputNom.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+                await inputNom.click({ force: true }).catch(() => {});
+                await inputNom.fill(nombre, { force: true }).catch(() => {});
+                await inputNom.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                await inputNom.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                await inputNom.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+
+                // 3. Mes y Año
+                const inputMes = locatorSeguro(paginaTelcel, "mes").first();
+                const inputAnio = locatorSeguro(paginaTelcel, "anio").first();
+                const mesSeparado = await inputMes.isVisible({ timeout: 2000 }).catch(() => false);
+                if (mesSeparado) {
+                    await inputMes.click();
+                    await inputMes.fill(mes, { force: true });
+                    await inputMes.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                    await inputMes.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                    await inputMes.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+
+                    if (await inputAnio.isVisible({ timeout: 2000 }).catch(() => false)) {
+                        await inputAnio.click();
+                        await inputAnio.fill(anio.slice(-2), { force: true });
+                        await inputAnio.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                        await inputAnio.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                        await inputAnio.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+                    }
+                } else {
+                    const inputFechaUnica = locatorSeguro(paginaTelcel, "fechaUnica").first();
+                    if (await inputFechaUnica.isVisible({ timeout: 2000 }).catch(() => false)) {
+                        await inputFechaUnica.click();
+                        await inputFechaUnica.fill(`${mes}/${anio.slice(-2)}`, { force: true });
+                        await inputFechaUnica.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                        await inputFechaUnica.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                        await inputFechaUnica.dispatchEvent('blur', { bubbles: true }).catch(() => {});
                     }
                 }
-                return false;
-            }).catch(() => false);
 
-            if (selecciono200) {
-                console.log(`[Telcel Usuario ${id}] ✅ Botón 'Lo quiero' del paquete $200 clickeado exitosamente.`);
-                await esperar(1500, id, miId);
-                break;
-            }
+                // 4. CVV
+                const inputCvv = locatorSeguro(paginaTelcel, "cvv").first();
+                if (await inputCvv.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await inputCvv.click();
+                    await inputCvv.fill(cvv, { force: true });
+                    await inputCvv.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                    await inputCvv.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                    await inputCvv.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+                }
 
-            // Si el campo de teléfono ya está en pantalla y ya se hizo clic
-            if (await telDirecto.isVisible({ timeout: 1500 }).catch(() => false)) {
-                break;
-            }
-        }
+                // Forzar validación React
+                await paginaTelcel.evaluate(() => {
+                    document.querySelectorAll('input').forEach(input => {
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        input.dispatchEvent(new Event('blur', { bubbles: true }));
+                    });
+                }).catch(() => {});
 
-        await ctx.reply("✅ PAQUETE $200 SELECCIONADO");
+                await ctx.reply("💳 DATOS LLENOS → ESPERANDO ACTIVACIÓN DE 'CONTINUAR'...");
 
-        // 2. 📱 CAPTURA DEL NÚMERO RESILIENTE
-        const inputTel = paginaTelcel.locator(selectorTel).first();
-        await inputTel.waitFor({ state: 'visible', timeout: 20000 });
-        await inputTel.click({ force: true });
-        await inputTel.fill(numero, { force: true });
-        await inputTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
-        await inputTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
-        await inputTel.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-
-        // Clic en Continuar del teléfono
-        const btnContinuarTel = paginaTelcel.locator('button:has-text("Continuar"), button:has-text("Siguiente"), button[type="submit"]').first();
-        if (await btnContinuarTel.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await btnContinuarTel.click({ force: true }).catch(() => {});
-        } else {
-            await paginaTelcel.getByRole('button', { name: /continuar|siguiente/i }).first().click({ force: true }).catch(() => {});
-        }
-        await ctx.reply("📱 NÚMERO INGRESADO");
-
-        // 3. ⚡ CAPTURA EXACTA DE TARJETA (SEGÚN FORMULARIO EN PANTALLA)
-        await ctx.reply("📝 Llenando datos de tarjeta...");
-
-        // 1. Número de tarjeta (16 dígitos)
-        const inputCC = paginaTelcel.locator('input[placeholder*="16 dígitos" i], input[placeholder*="16" i], input#creditCardNumber, input[name*="creditCardNumber"]').first();
-        await inputCC.waitFor({ state: 'visible', timeout: 20000 });
-        await inputCC.click();
-        await inputCC.fill(cc, { force: true });
-        await inputCC.dispatchEvent('input', { bubbles: true }).catch(() => {});
-        await inputCC.dispatchEvent('change', { bubbles: true }).catch(() => {});
-        await inputCC.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-
-        // 2. Nombre (Nombre completo - Obligatorio)
-        console.log(`[Telcel] Llenando nombre del titular: ${nombre}`);
-        const inputNom = paginaTelcel.locator('input[placeholder*="Nombre completo" i], input[placeholder*="Nombre" i], #creditCardName, input[name*="creditCardName"], input[name*="name" i]').first();
-        await inputNom.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-        await inputNom.click({ force: true }).catch(() => {});
-        await inputNom.fill(nombre, { force: true }).catch(() => {});
-        await inputNom.dispatchEvent('input', { bubbles: true }).catch(() => {});
-        await inputNom.dispatchEvent('change', { bubbles: true }).catch(() => {});
-        await inputNom.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-
-        // Respaldo por evaluate nativo si estuviera vacío
-        await paginaTelcel.evaluate((nom) => {
-            const inputs = Array.from(document.querySelectorAll('input'));
-            const inputName = inputs.find(i => 
-                (i.placeholder && i.placeholder.toLowerCase().includes('nombre')) || 
-                (i.id && i.id.toLowerCase().includes('name')) ||
-                (i.name && i.name.toLowerCase().includes('name'))
-            );
-            if (inputName) {
-                inputName.value = nom;
-                inputName.dispatchEvent(new Event('input', { bubbles: true }));
-                inputName.dispatchEvent(new Event('change', { bubbles: true }));
-                inputName.dispatchEvent(new Event('blur', { bubbles: true }));
-            }
-        }, nombre).catch(() => {});
-
-        // 3. Vencimiento: Mes (MM) y Año (AA) separados
-        const inputMes = paginaTelcel.locator('input[placeholder="MM"], input#month, input[name*="month"], div.relative.w-full input[placeholder="MM"]').first();
-        const inputAnio = paginaTelcel.locator('input[placeholder="AA"], input#year, input[name*="year"], div.relative.w-full input[placeholder="AA"]').first();
-
-        const mesSeparado = await inputMes.isVisible({ timeout: 2000 }).catch(() => false);
-        if (mesSeparado) {
-            // Llenar Mes
-            await inputMes.click();
-            await inputMes.fill(mes, { force: true });
-            await inputMes.dispatchEvent('input', { bubbles: true }).catch(() => {});
-            await inputMes.dispatchEvent('change', { bubbles: true }).catch(() => {});
-            await inputMes.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-
-            // Llenar Año
-            if (await inputAnio.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputAnio.click();
-                await inputAnio.fill(anio.slice(-2), { force: true });
-                await inputAnio.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                await inputAnio.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                await inputAnio.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-            }
-        } else {
-            // Campo de fecha unificado (MM / AA)
-            const inputFechaUnica = paginaTelcel.locator('input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i], input[placeholder*="Vencimiento" i], input[name*="exp"]').first();
-            if (await inputFechaUnica.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputFechaUnica.click();
-                await inputFechaUnica.fill(`${mes}/${anio.slice(-2)}`, { force: true });
-                await inputFechaUnica.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                await inputFechaUnica.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                await inputFechaUnica.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-            }
-        }
-
-        // 4. CVV (000 / CVV)
-        const inputCvv = paginaTelcel.locator('input[placeholder*="000" i], input[placeholder*="CVV" i], input#cvv-input, input[name*="cvv"]').first();
-        if (await inputCvv.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await inputCvv.click();
-            await inputCvv.fill(cvv, { force: true });
-            await inputCvv.dispatchEvent('input', { bubbles: true }).catch(() => {});
-            await inputCvv.dispatchEvent('change', { bubbles: true }).catch(() => {});
-            await inputCvv.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-        }
-
-        // Disparar eventos globales para forzar validación en React / Vue
-        await paginaTelcel.evaluate(() => {
-            document.querySelectorAll('input').forEach(input => {
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                input.dispatchEvent(new Event('blur', { bubbles: true }));
-            });
-        }).catch(() => {});
-
-        await ctx.reply("💳 DATOS LLENOS → ESPERANDO ACTIVACIÓN DE 'CONTINUAR'...");
-
-        // 4. 🔘 ACTIVAR Y DAR CLIC A BOTÓN (SI ESTÁ DESHABILITADO)
-        await paginaTelcel.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar'));
-            if (b) { 
-                b.removeAttribute('disabled'); 
-                b.style.pointerEvents = 'auto'; 
-            }
-        }).catch(() => {});
-
-        const btnContinuar = paginaTelcel.locator('button[type="submit"]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar")').last();
-
-        // Esperar a que se quite el disabled y cambie el color gris bg-[#d0d0d0]
-        await paginaTelcel.waitForFunction(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar'));
-            if (!b) return false;
-            const hasDisabled = b.disabled || b.hasAttribute('disabled') || b.className.includes('bg-[#d0d0d0]') || b.className.includes('cursor-not-allowed');
-            const isPurple = b.className.includes('bg-[#7b1fa2]') || (window.getComputedStyle(b).backgroundColor || '').includes('123, 31, 162');
-            return !hasDisabled || isPurple;
-        }, { timeout: 15000 }).catch(() => {});
-
-        // Scroll al botón
-        await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
-        await esperar(500, id, miId);
-
-        // Dar clic forzado al botón
-        await btnContinuar.click({ force: true }).catch(() => {});
-        
-        // Disparar clic nativo de respaldo
-        await paginaTelcel.evaluate(() => {
-            const btns = Array.from(document.querySelectorAll('button'));
-            const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar'));
-            if (b) {
-                b.removeAttribute('disabled');
-                b.style.pointerEvents = 'auto';
-                b.click();
-            }
-        }).catch(() => {});
-
-        console.log("✅ CLIC EN BOTÓN 'CONTINUAR' EJECUTADO");
-        await ctx.reply("⌛ Procesando pago... MANTENIENDO VENTANA ABIERTA HASTA RESPUESTA FINAL...");
-
-        // 5. 🚀 ESPERA ACTIVA: DETECCIÓN DE 3 TIPOS DE PANTALLA
-        let tipoPantalla = "DESCONOCIDO";
-        let resultadoTexto = "PROCESO FINALIZADO";
-        const inicioEspera = Date.now();
-        const TIEMPO_MAX_ESPERA = 90000; // Hasta 90 segundos
-
-        while (Date.now() - inicioEspera < TIEMPO_MAX_ESPERA) {
-            // Verificar texto en la página
-            const textoPagina = await paginaTelcel.evaluate(() => {
-                return (document.body ? document.body.innerText : '') || '';
-            }).catch(() => '');
-
-            // 🟢 TIPO 1: PAGO EXITOSO
-            if (
-                /(pago\s*exitoso)|(transacci[óo]n\s*exitosa)|(recarga\s*exitosa)|(¡listo!)|(folio:)|(folio\s*\d+)|(comprobante)|(ticket)|(aprobada)|(gracias\s*por\s*tu\s*compra)|(tu\s*pago\s*ha\s*sido\s*(exitoso|procesado|aprobado))|(tu\s*recarga\s*fue\s*exitosa)/i.test(textoPagina)
-            ) {
-                tipoPantalla = "PAGO_EXITOSO";
-                resultadoTexto = "✅ PAGO EXITOSO / APROBADO";
-                console.log("🎉 Detectada Pantalla: Pago Exitoso");
-                break;
-            }
-
-            // 🔴 TIPO 2: BIN INVÁLIDO / TARJETA NO VÁLIDA
-            if (
-                /(bin\s*(inv[áa]lido|no\s*v[áa]lido|no\s*soportado))|(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|no\s*soportada|no\s*aceptada|no\s*reconocida))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(tipo\s*de\s*tarjeta\s*no\s*v[áa]lida)|(revisa\s*el\s*n[úu]mero\s*de\s*tarjeta)|(tarjeta\s*no\s*permitida)/i.test(textoPagina)
-            ) {
-                tipoPantalla = "BIN_INVALIDO";
-                resultadoTexto = "🚫 BIN / TARJETA INVÁLIDA";
-                console.log("⚠️ Detectada Pantalla: BIN / Tarjeta Inválida");
-                break;
-            }
-
-            // 🟠 TIPO 3: TU SOLICITUD NO PUDO SER COMPLETADA / RECHAZADA
-            if (
-                /(tu\s*solicitud\s*no\s*pudo\s*ser\s*(completada|procesada))|(no\s*se\s*pudo\s*realizar\s*(el\s*pago|la\s*operaci[óo]n))|(transacci[óo]n\s*declinada)|(pago\s*rechazado)|(tarjeta\s*rechazada)|(fondos\s*insuficientes)|(error\s*al\s*procesar)|(intenta\s*con\s*otra\s*tarjeta)|(operaci[óo]n\s*no\s*exitosa)|(hubo\s*un\s*problema\s*al\s*procesar)|(no\s*autorizada)|(rechazada\s*por\s*el\s*banco)/i.test(textoPagina)
-            ) {
-                tipoPantalla = "SOLICITUD_NO_COMPLETADA";
-                resultadoTexto = "❌ TU SOLICITUD NO PUDO SER COMPLETADA";
-                console.log("⚠️ Detectada Pantalla: Solicitud No Completada");
-                break;
-            }
-
-            await esperar(2000, id, miId, paginaTelcel);
-        }
-
-        if (tipoPantalla === "DESCONOCIDO") {
-            resultadoTexto = "⌛ RESPUESTA DE TELCEL EN PANTALLA";
-        }
-
-        await esperar(1500, id, miId, paginaTelcel);
-
-        // ✅ 6. CAPTURA DE PANTALLA Y ENVÍO AL BOT SEGÚN EL TIPO
-        const captura = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
-        const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
-
-        if (miId === ejecucionesUsuario.get(id)) {
-            let mensajeCaption = '';
-            if (tipoPantalla === "PAGO_EXITOSO") {
-                mensajeCaption = 
-                    `✅ RECARGA FINALIZADA CON ÉXITO ✅\n\n` +
-                    `📅 Fecha: ${fechaHora}\n` +
-                    `💰 Monto: $${MONTO_TELCEL} MXN\n` +
-                    `📱 Número: ${numero}\n` +
-                    `👤 Titular: ${nombre}\n` +
-                    `💳 Tarjeta: ****${cc.slice(-4)}`;
-            } else if (tipoPantalla === "BIN_INVALIDO") {
-                mensajeCaption = 
-                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
-                    `💬 Motivo: BIN o tarjeta no admitida por Telcel\n` +
-                    `💳 Tarjeta: ****${cc.slice(-4)}\n` +
-                    `🔄 Instrucción: Por favor intenta nuevamente más tarde con otra tarjeta.`;
-            } else if (tipoPantalla === "SOLICITUD_NO_COMPLETADA") {
-                mensajeCaption = 
-                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
-                    `💬 Motivo: Telcel no pudo completar la solicitud de pago\n` +
-                    `💳 Tarjeta: ****${cc.slice(-4)}\n` +
-                    `🔄 Instrucción: Por favor intenta nuevamente más tarde.`;
-            } else {
-                mensajeCaption = 
-                    `📸 ESTADO DE LA OPERACIÓN\n\n` +
-                    `📅 Fecha: ${fechaHora}\n` +
-                    `📱 Número: ${numero}\n` +
-                    `💳 Tarjeta: ****${cc.slice(-4)}`;
-            }
-
-            if (captura) {
-                await ctx.replyWithPhoto(
-                    { source: captura },
-                    {
-                        caption: mensajeCaption.slice(0, 1024),
-                        ...Markup.inlineKeyboard([
-                            [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
-                            [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-                        ])
+                // 4. Activar y dar clic a botón Continuar
+                await paginaTelcel.evaluate(() => {
+                    const btns = Array.from(document.querySelectorAll('button'));
+                    const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar'));
+                    if (b) { 
+                        b.removeAttribute('disabled'); 
+                        b.style.pointerEvents = 'auto'; 
                     }
-                ).catch(() => {});
-            } else {
-                await ctx.reply(
-                    mensajeCaption,
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
-                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-                    ])
-                );
-            }
-        }
+                }).catch(() => {});
 
-        // ⏱️ TIEMPO ADICIONAL: Esperar 20 segundos con el navegador abierto antes de cerrar para que el usuario pueda ver
-        console.log(`[Telcel Usuario ${id}] ⏳ Esperando 20 segundos antes de cerrar el navegador...`);
-        await esperar(20000, id, miId, paginaTelcel).catch(() => {});
+                const btnContinuar = locatorSeguro(paginaTelcel, "botonPagar").last();
+                await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
+                await esperar(500, id, miId);
+                await btnContinuar.click({ force: true }).catch(() => {});
+                
+                console.log("✅ CLIC EN BOTÓN 'CONTINUAR' EJECUTADO");
+                await ctx.reply("⌛ Procesando pago... MANTENIENDO VENTANA ABIERTA HASTA RESPUESTA FINAL...");
 
-    } catch(errTelcel) {
-        const esCierreManual = cerradoManualmente || 
-                               (errTelcel.message || '').includes('closed') ||
-                               (errTelcel.message || '').includes('NAVEGADOR_CERRADO_MANUALMENTE');
+                // 5. 🚀 ESPERA ACTIVA: DETECCIÓN DE 3 TIPOS DE PANTALLA
+                let tipoPantalla = "DESCONOCIDO";
+                let resultadoTexto = "PROCESO FINALIZADO";
+                const inicioEspera = Date.now();
+                const TIEMPO_MAX_ESPERA = 90000;
 
-        if (esCierreManual) {
-            console.log(`[Telcel Usuario ${id}] 🔄 Cierre manual detectado. Restaurando todo el proceso...`);
-            if (miId === ejecucionesUsuario.get(id)) {
-                await ctx.reply(
-                    "🔄 Ventana cerrada. Se ha restaurado todo el proceso correctamente.",
-                    Markup.inlineKeyboard([
-                        [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
-                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-                    ])
-                );
-            }
-        } else {
-            console.error("❌ ERROR Telcel:", errTelcel);
-            if (miId === ejecucionesUsuario.get(id)) {
-                let capturaEnviada = false;
-                if (paginaTelcel && !paginaTelcel.isClosed()) {
-                    const capError = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
-                    if (capError) {
-                        capturaEnviada = true;
+                while (Date.now() - inicioEspera < TIEMPO_MAX_ESPERA) {
+                    const textoPagina = await paginaTelcel.evaluate(() => {
+                        return (document.body ? document.body.innerText : '') || '';
+                    }).catch(() => '');
+
+                    if (/(pago\s*exitoso)|(transacci[óo]n\s*exitosa)|(recarga\s*exitosa)|(¡listo!)|(folio:)|(folio\s*\d+)|(comprobante)|(ticket)|(aprobada)|(gracias\s*por\s*tu\s*compra)|(tu\s*pago\s*ha\s*sido\s*(exitoso|procesado|aprobado))|(tu\s*recarga\s*fue\s*exitosa)/i.test(textoPagina)) {
+                        tipoPantalla = "PAGO_EXITOSO";
+                        resultadoTexto = "✅ PAGO EXITOSO / APROBADO";
+                        break;
+                    }
+
+                    if (/(bin\s*(inv[áa]lido|no\s*v[áa]lido|no\s*soportado))|(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|no\s*soportada|no\s*aceptada|no\s*reconocida))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(tipo\s*de\s*tarjeta\s*no\s*v[áa]lida)|(revisa\s*el\s*n[úu]mero\s*de\s*tarjeta)|(tarjeta\s*no\s*permitida)/i.test(textoPagina)) {
+                        tipoPantalla = "BIN_INVALIDO";
+                        resultadoTexto = "🚫 BIN / TARJETA INVÁLIDA";
+                        break;
+                    }
+
+                    if (/(tu\s*solicitud\s*no\s*pudo\s*ser\s*(completada|procesada))|(no\s*se\s*pudo\s*realizar\s*(el\s*pago|la\s*operaci[óo]n))|(transacci[óo]n\s*declinada)|(pago\s*rechazado)|(tarjeta\s*rechazada)|(fondos\s*insuficientes)|(error\s*al\s*procesar)|(intenta\s*con\s*otra\s*tarjeta)|(operaci[óo]n\s*no\s*exitosa)|(hubo\s*un\s*problema\s*al\s*procesar)|(no\s*autorizada)|(rechazada\s*por\s*el\s*banco)/i.test(textoPagina)) {
+                        tipoPantalla = "SOLICITUD_NO_COMPLETADA";
+                        resultadoTexto = "❌ TU SOLICITUD NO PUDO SER COMPLETADA";
+                        break;
+                    }
+
+                    await esperar(2000, id, miId, paginaTelcel);
+                }
+
+                if (tipoPantalla === "DESCONOCIDO") {
+                    resultadoTexto = "⌛ RESPUESTA DE TELCEL EN PANTALLA";
+                }
+
+                await esperar(1500, id, miId, paginaTelcel);
+
+                // Captura de pantalla y envío
+                const captura = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
+                const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+
+                if (miId === ejecucionesUsuario.get(id)) {
+                    let mensajeCaption = '';
+                    if (tipoPantalla === "PAGO_EXITOSO") {
+                        mensajeCaption = 
+                            `✅ RECARGA FINALIZADA CON ÉXITO ✅\n\n` +
+                            `📅 Fecha: ${fechaHora}\n` +
+                            `💰 Monto: $${MONTO_TELCEL} MXN\n` +
+                            `📱 Número: ${numero}\n` +
+                            `👤 Titular: ${nombre}\n` +
+                            `💳 Tarjeta: ****${cc.slice(-4)}`;
+                    } else if (tipoPantalla === "BIN_INVALIDO") {
+                        mensajeCaption = 
+                            `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                            `💬 Motivo: BIN o tarjeta no admitida por Telcel\n` +
+                            `💳 Tarjeta: ****${cc.slice(-4)}\n` +
+                            `🔄 Instrucción: Por favor intenta nuevamente con otra tarjeta.`;
+                    } else if (tipoPantalla === "SOLICITUD_NO_COMPLETADA") {
+                        mensajeCaption = 
+                            `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                            `💬 Motivo: Telcel no pudo completar la solicitud de pago\n` +
+                            `💳 Tarjeta: ****${cc.slice(-4)}\n` +
+                            `🔄 Instrucción: Por favor intenta nuevamente más tarde.`;
+                    } else {
+                        mensajeCaption = 
+                            `📸 ESTADO DE LA OPERACIÓN\n\n` +
+                            `📅 Fecha: ${fechaHora}\n` +
+                            `📱 Número: ${numero}\n` +
+                            `💳 Tarjeta: ****${cc.slice(-4)}`;
+                    }
+
+                    if (captura) {
                         await ctx.replyWithPhoto(
-                            { source: capError },
+                            { source: captura },
                             {
-                                caption:
-                                    `❌ ERROR EN EL PROCESO TELCEL ❌\n\n` +
-                                    `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n` +
-                                    `📍 URL: ${paginaTelcel.url().slice(0, 100)}\n\n` +
-                                    `🔄 Sesión reseteada automáticamente.`,
+                                caption: mensajeCaption.slice(0, 1024),
                                 ...Markup.inlineKeyboard([
-                                    [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                                    [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
                                     [Markup.button.callback('❌ Salir', 'cancelar_accion')]
                                 ])
                             }
                         ).catch(() => {});
+                    } else {
+                        await ctx.reply(
+                            mensajeCaption,
+                            Markup.inlineKeyboard([
+                                [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
+                                [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                            ])
+                        );
                     }
                 }
-                if (!capturaEnviada) {
-                    await ctx.reply(
-                        `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
-                        `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n\n` +
-                        `🔄 Sesión reseteada automáticamente.`,
-                        Markup.inlineKeyboard([
-                            [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
-                            [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-                        ])
-                    ).catch(() => {});
-                }
-            }
-        }
-    } finally {
-        // 🧹 RESET Y LIMPIEZA COMPLETA DE RECURSOS EN NAVEGADOR
-        try {
-            if (contexto) {
-                await contexto.clearCookies().catch(() => {});
-                await contexto.clearPermissions().catch(() => {});
-            }
-            if (paginaTelcel && !paginaTelcel.isClosed()) {
-                await paginaTelcel.close().catch(() => {});
-            }
-            if (contexto) {
-                await contexto.close().catch(() => {});
-            }
-            if (navegadorTelcel && navegadorTelcel.isConnected()) {
-                await navegadorTelcel.close().catch(() => {});
-            }
-        } catch(eClean) {}
 
-        // 🧹 RESTAURAR ESTADO Y MEMORIA TOTAL DE ESTE USUARIO
-        await liberarUsuario(id, ctx);
-        console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados al 100%.`);
+                // ⏱️ Espera antes de cerrar
+                console.log(`[Telcel Usuario ${id}] ⏳ Esperando 20 segundos antes de cerrar el navegador...`);
+                await esperar(20000, id, miId, paginaTelcel).catch(() => {});
+
+                return true;
+
+            } finally {
+                await limpiarTodoYReiniciar(id, ctx, { pagina: paginaTelcel, ctx: contexto, nav: navegadorTelcel });
+                console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados al 100%.`);
+            }
+        }, 3, id, ctx);
+
+    } catch(errTelcel) {
+        console.error(`[Telcel Usuario ${id}] ❌ Fallo total tras reintentos:`, errTelcel.message || errTelcel);
+        await ctx.reply(
+            `❌ NO SE PUDO COMPLETAR EL PROCESO TRAS 3 INTENTOS ❌\n\n` +
+            `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n\n` +
+            `🔄 Sesión y memoria reseteadas al 100%.`,
+            Markup.inlineKeyboard([
+                [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+            ])
+        ).catch(() => {});
+    } finally {
+        await limpiarTodoYReiniciar(id, ctx);
     }
 }
 
@@ -2069,18 +2009,9 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                 await contexto.clearCookies().catch(() => {});
                 await contexto.clearPermissions().catch(() => {});
             }
-            if (pagina && !pagina.isClosed()) {
-                await pagina.close().catch(() => {});
-            }
-            if (contexto) {
-                await contexto.close().catch(() => {});
-            }
-            if (navegador && navegador.isConnected()) {
-                await navegador.close().catch(() => {});
-            }
         } catch(eClean) {}
 
-        await liberarUsuario(usuarioId, ctx);
+        await limpiarTodoYReiniciar(usuarioId, ctx, { pagina, ctx: contexto, nav: navegador });
         console.log(`[Usuario ${usuarioId}] 🧹 Sesión y navegador reseteados al 100%.`);
     }
 }
@@ -2123,3 +2054,4 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
     .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
+
