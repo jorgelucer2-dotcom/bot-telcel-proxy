@@ -1,6 +1,6 @@
 'use strict';
 
-process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
+process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
 require('dotenv').config();
 const http = require('http');
 const { exec } = require('child_process');
@@ -1761,5 +1761,4 @@ function iniciarBotTelegram() {
 }
 
 iniciarBotTelegram();
-
 
