@@ -1,11 +1,11 @@
 'use strict';
 
 process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
-require('dotenv').config();
 const http = require('http');
 const { exec } = require('child_process');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
+require('dotenv').config();
 
 // 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
 const PROXY = {
@@ -32,7 +32,7 @@ const servidorHttp = http.createServer((req, res) => {
 });
 
 servidorHttp.listen(PUERTO, '0.0.0.0', () => {
-    console.log(`📡 Servidor HTTP activo y escuchando en 0.0.0.0:${PUERTO} (Render compatible)`);
+    console.log(`✅ Servidor HTTP activo en puerto ${PUERTO}`);
 });
 
 // --------------------------------------------------
@@ -1746,4 +1746,89 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                     );
                 } else {
                     await ctx.reply(
-                        "❌ NO SE PUDO PROCESAR EL PAGO\n\n"
+                        "❌ NO SE PUDO PROCESAR EL PAGO\n\n" +
+                        "⚠️ Netflix no pudo procesar esta tarjeta (**" + cuenta.tarjeta.slice(-4) + ").\n" +
+                        "💡 Intenta con OTRA tarjeta.\n\n" +
+                        "🔄 Sesión reiniciada. Escribe /start para volver a empezar."
+                    );
+                }
+            } catch(e) {}
+
+            sesionesUsuario.delete(usuarioId);
+            if (navegador) await navegador.close().catch(() => {});
+            return 'TARJETA_RECHAZADA';
+        }
+
+        // Si aparece algún botón final como "Continuar", "Siguiente" o "Empezar a ver"
+        const btnFinal = pagina.locator('button:has-text("Continuar"), button:has-text("Siguiente"), button:has-text("Empezar a ver"), a:has-text("Empezar a ver")').first();
+        if (await btnFinal.isVisible({ timeout: 4000 }).catch(() => false)) {
+            await btnFinal.click({ force: true }).catch(() => {});
+            await esperar(3000, usuarioId, miId);
+        }
+
+        // 📸 ÚNICO MENSAJE FINAL CON CAPTURA DE ÉXITO EN TELEGRAM
+        if (pagina && miId === ejecucionesUsuario.get(usuarioId)) {
+            try {
+                const capturaExito = await pagina.screenshot({ fullPage: false });
+                await ctx.replyWithPhoto(
+                    { source: capturaExito },
+                    {
+                        caption:
+                            "🎉 ¡CUENTA NETFLIX ACREDITADA CON ÉXITO!\n\n" +
+                            "📧 Correo: " + cuenta.correo + "\n" +
+                            "🔑 Contraseña: " + cuenta.pass + "\n" +
+                            "👤 Titular: " + cuenta.nombreCompleto + "\n" +
+                            "💳 Tarjeta: **" + cuenta.tarjeta.slice(-4) + "\n\n" +
+                            "✅ Proceso finalizado y navegador cerrado."
+                    }
+                );
+            } catch(eScreen) {
+                console.error("No se pudo enviar la captura de éxito:", eScreen);
+            }
+        }
+
+        await esperar(2000, usuarioId, miId);
+        return true;
+
+    } catch(err) {
+        console.error(`[Usuario ${usuarioId}] Error en flujoUsuarioIndependiente:`, err.message || err);
+        throw err;
+    } finally {
+        if(navegador) {
+            try {
+                await navegador.close().catch(() => {});
+            } catch(e) {}
+            navegadoresActivos.delete(usuarioId);
+        }
+    }
+}
+
+// 🛡️ MANEJO DE SEÑALES PARA RENDER Y SERVIDORES CLOUD
+process.once('SIGINT', () => {
+    console.log('🛑 Recibido SIGINT, cerrando bot...');
+    bot.stop('SIGINT');
+    process.exit(0);
+});
+
+process.once('SIGTERM', () => {
+    console.log('🛑 Recibido SIGTERM, cerrando bot...');
+    bot.stop('SIGTERM');
+    process.exit(0);
+});
+
+function iniciarBotTelegram() {
+    bot.launch({
+        dropPendingUpdates: true,
+        polling: {
+            timeout: 3000
+        }
+    })
+    .then(() => console.log(`✅ Bot corriendo en puerto ${PUERTO} | Proxy: MÉXICO 🇲🇽 (Capacidad: 8 concurrentes)`))
+    .catch(err => {
+        console.error("⚠️ Fallo en conexión de Telegram. Reintentando en 2 segundos...", err.message || err);
+        setTimeout(iniciarBotTelegram, 2000);
+    });
+}
+
+iniciarBotTelegram();
+
