@@ -1,5 +1,6 @@
 'use strict';
 
+process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
 require('dotenv').config();
 const http = require('http');
 const { exec } = require('child_process');
@@ -41,7 +42,7 @@ if (process.platform === 'linux' || process.env.RENDER) {
     try {
         console.log("🔍 Verificando/Instalando binarios de Chromium para Render...");
         const { execSync } = require('child_process');
-        execSync('npx playwright install chromium --with-deps', { stdio: 'inherit', timeout: 120000 });
+        execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 120000 });
         console.log("✅ Binarios de Chromium verificados correctamente");
     } catch (err) {
         console.log("ℹ️ Verificación de Chromium:", err.message || err);
@@ -1715,3 +1716,4 @@ function iniciarBotTelegram() {
 }
 
 iniciarBotTelegram();
+
