@@ -1006,7 +1006,7 @@ async function abrirMasPaquetes(pagina, monto) {
  */
 async function seleccionarPaquete(pagina, monto) {
     console.log(`[PAQUETES] Monto solicitado: $${monto}`);
-    console.log('[PAQUETES] Buscando tarjeta correspondiente...');
+    console.log(`[PAQUETES] Buscando tarjeta $${monto}...`);
 
     // Criterio exacto de costo en la tarjeta ($200, $300 o $500)
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
@@ -1021,12 +1021,12 @@ async function seleccionarPaquete(pagina, monto) {
     const conteo = await tarjeta.count().catch(() => 0);
 
     if (conteo === 0) {
-        console.error(`[PAQUETES] ERROR: PAQUETE $${monto} NO ENCONTRADO`);
+        console.error(`[PAQUETES] ERROR: PAQUETE_$${monto}_NO_ENCONTRADO`);
         throw new Error(`PAQUETE_$${monto}_NO_ENCONTRADO`);
     }
 
     if (conteo > 1) {
-        console.error('[PAQUETES] Múltiples coincidencias encontradas');
+        console.error(`[PAQUETES] ERROR: MULTIPLES_PAQUETES_COINCIDENTES_$${monto}`);
         throw new Error(`MULTIPLES_PAQUETES_COINCIDENTES_$${monto}`);
     }
 
@@ -1036,20 +1036,18 @@ async function seleccionarPaquete(pagina, monto) {
     // Dentro de ESA MISMA tarjeta encontrar exclusivamente su botón "Lo quiero"
     const botonLoQuiero = tarjeta.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")');
 
-    await botonLoQuiero.waitFor({ state: 'attached', timeout: 8000 });
     await botonLoQuiero.scrollIntoViewIfNeeded();
+    await botonLoQuiero.waitFor({ state: 'visible', timeout: 8000 });
 
-    const visible = await botonLoQuiero.isVisible({ timeout: 4000 }).catch(() => false);
-    const enabled = visible ? await botonLoQuiero.isEnabled().catch(() => false) : false;
+    const enabled = await botonLoQuiero.isEnabled().catch(() => false);
 
-    console.log('[PAQUETES] Botón encontrado.');
-    console.log(`[PAQUETES] Botón visible: ${visible ? 'SI' : 'NO'}`);
-    console.log(`[PAQUETES] Botón habilitado: ${enabled ? 'SI' : 'NO'}`);
-
-    if (!visible || !enabled) {
-        console.error(`[PAQUETES] ERROR: PAQUETE $${monto} NO ENCONTRADO`);
+    if (!enabled) {
+        console.error(`[PAQUETES] ERROR: PAQUETE_$${monto}_NO_ENCONTRADO`);
         throw new Error(`BOTON_LO_QUIERO_$${monto}_NO_DISPONIBLE`);
     }
+
+    console.log('[PAQUETES] Botón "Lo quiero" encontrado.');
+    console.log('[PAQUETES] Botón habilitado.');
 
     // Clic normal de Playwright
     await botonLoQuiero.click();
@@ -2718,5 +2716,3 @@ if (ES_MODO_PRUEBA_IP) {
 }
 
 module.exports = { testConexionNavegador, testDiagnosticoRed };
-
-
