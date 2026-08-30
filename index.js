@@ -1,10 +1,11 @@
 'use strict';
 
 process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
+require('dotenv').config();
+const http = require('http');
+const { exec } = require('child_process');
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
-const http = require('http');
-require('dotenv').config();
 
 // 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
 const PROXY = {
@@ -33,8 +34,6 @@ const servidorHttp = http.createServer((req, res) => {
 servidorHttp.listen(PUERTO, '0.0.0.0', () => {
     console.log(`📡 Servidor HTTP activo y escuchando en 0.0.0.0:${PUERTO} (Render compatible)`);
 });
-
-
 
 // --------------------------------------------------
 // 🛡️ PROTECCIÓN GLOBAL CONTRA CAÍDAS DE NODE.JS
@@ -1220,31 +1219,48 @@ async function iniciarProcesoUsuario(ctx, datosTarjeta, usuarioId) {
 async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
     let navegador = null;
     let pagina = null;
+    let contexto = null;
+
+    // Helper para capturar pantalla en error y notificar a Telegram
+    async function tomarCapturaError(motivo) {
+        if (!pagina || (typeof pagina.isClosed === 'function' && pagina.isClosed())) return;
+        try {
+            const captura = await pagina.screenshot({ fullPage: true }).catch(() => null);
+            if (captura && miId === ejecucionesUsuario.get(usuarioId)) {
+                await ctx.replyWithPhoto(
+                    { source: captura },
+                    { caption: `🚫 ERROR: ${motivo}` }
+                ).catch(() => {});
+            }
+        } catch(e) {}
+    }
+
     try{
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
 
-        // 1. Lanzar navegador independiente para este usuario
+        // 4️⃣ LANZAMIENTO DE NAVEGADOR MÁS SEGURO ANTI-BLOQUEO
         navegador = await chromium.launch({
             headless: ES_HEADLESS,
             proxy: PROXY,
             timeout: 240000,
-            slowMo: 180,
+            slowMo: 250,
             args: [
                 '--no-sandbox',
                 '--disable-gpu',
-                '--ignore-certificate-errors',
-                '--disable-features=IsolateOrigins,site-per-process',
-                '--start-maximized',
+                '--disable-dev-shm-usage',
+                '--disable-web-security',
                 '--disable-blink-features=AutomationControlled',
+                '--start-maximized',
                 '--disable-setuid-sandbox',
                 '--disable-infobars',
-                '--disable-dev-shm-usage',
+                '--ignore-certificate-errors',
+                '--disable-features=IsolateOrigins,site-per-process',
                 '--lang=es-MX'
             ]
         });
         navegadoresActivos.set(usuarioId, navegador);
 
-        const contexto = await navegador.newContext({
+        contexto = await navegador.newContext({
             viewport: null,
             locale: 'es-MX',
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -1257,9 +1273,10 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         pagina.setDefaultTimeout(240000);
         pagina.setDefaultNavigationTimeout(240000);
 
-        // 🛡️ MÁSCARA ANTI-DETECCIÓN AVANZADA
+        // 🛡️ MÁSCARA ANTI-DETECCIÓN AVANZADA (Eliminación total de huellas)
         await pagina.addInitScript(() => {
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            delete navigator.__proto__.webdriver;
             window.chrome = { runtime: {} };
             Object.defineProperty(navigator, 'languages', { get: () => ['es-MX', 'es', 'en-US', 'en'] });
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
@@ -1271,7 +1288,11 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                 await pagina.waitForLoadState('domcontentloaded', { timeout: 25000 });
             } catch(e) {}
             const errorRojo = await pagina.locator('div:has-text("Algo salió mal")').isVisible({timeout:2000}).catch(() => false);
-            if(errorRojo) throw new Error("Netflix bloqueó la sesión: Cambia tu IP o red");
+            if(errorRojo) {
+                console.error("❌ NO APARECIÓ: página bloqueada/IP detectada (Algo salió mal)");
+                await tomarCapturaError("Página bloqueada o IP detectada por Netflix");
+                throw new Error("Netflix bloqueó la sesión: Cambia tu IP o red");
+            }
         }
 
         // 📞 DETECTAR PANTALLA DE TELÉFONO / CONFIRMACIÓN DE CUENTA
@@ -1348,7 +1369,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 🌐 2. CARGAR NETFLIX
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        console.log(`[Usuario ${usuarioId}] 🌐 Cargando https://netflix.com/mx/...`);
+        console.log("🔎 PASO 1: Cargando página...");
         try {
             await pagina.goto('https://netflix.com/mx/', { timeout: 35000, waitUntil: 'commit' });
             await pagina.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
@@ -1368,21 +1389,47 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
             await esperar(1500, usuarioId, miId);
         }
 
-        // 📧 4. CAMPO CORREO
+        // 📧 4. CAMPO CORREO (1️⃣ & 2️⃣ & 5️⃣ MEJORAS DE DETECCIÓN Y REINTENTO)
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        const campoCorreo = pagina.locator('input[name="email"], input[placeholder*="Email"], input[type="email"]').first();
-        await campoCorreo.waitFor({state:'visible', timeout:30000});
-        await campoCorreo.scrollIntoViewIfNeeded();
-        await campoCorreo.click({force:true});
-        await campoCorreo.fill('', {force:true});
-        await campoCorreo.type(cuenta.correo, {delay: aleatorio(75, 110), force:true});
+        console.log("🔎 PASO 2: Buscando correo visible...");
+
+        const selectorCorreo = 'input[placeholder*="Email" i], input[data-uia="email"], input[data-uia*="email"], input[name="email"], input[type="email"]';
+        const campoCorreo = pagina.locator(selectorCorreo).first();
+
+        let encontradoCorreo = false;
+        try {
+            await campoCorreo.waitFor({ state: 'visible', timeout: 15000 });
+            encontradoCorreo = true;
+        } catch (eWaitFor) {
+            console.warn("⚠️ No apareció correo en 15s. Aplicando reintento inteligente y recarga...");
+            await pagina.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+            await esperar(3000, usuarioId, miId);
+            try {
+                await campoCorreo.waitFor({ state: 'visible', timeout: 15000 });
+                encontradoCorreo = true;
+            } catch (eRetry) {
+                console.error("❌ NO APARECIÓ: página bloqueada/IP detectada");
+                await tomarCapturaError("Página bloqueada o selector roto en campo correo");
+                throw new Error("No se pudo localizar el campo de correo en Netflix");
+            }
+        }
+
+        console.log("✅ CAMPO ENCONTRADO, ESCRIBIENDO...");
+        await campoCorreo.scrollIntoViewIfNeeded().catch(() => {});
+        await campoCorreo.click({ force: true });
+        await campoCorreo.fill('', { force: true });
+        await campoCorreo.type(cuenta.correo, { delay: aleatorio(75, 110), force: true });
         
         const valorEscrito = await campoCorreo.inputValue().catch(() => '');
-        if(!valorEscrito || valorEscrito.length < 5) throw new Error("No se pudo escribir el correo correctamente");
+        if(!valorEscrito || valorEscrito.length < 5) {
+            await tomarCapturaError("No se pudo escribir el correo correctamente");
+            throw new Error("No se pudo escribir el correo correctamente");
+        }
         console.log(`[Usuario ${usuarioId}] ✅ Correo escrito:`, valorEscrito);
 
         // ➡️ 5. BOTÓN COMENZAR / CONTINUAR
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
+        console.log("🔎 PASO 3: Enviando formulario inicial...");
         const btnComenzar = pagina.locator('button:has-text("Comenzar"), button:has-text("Continuar"), button[data-uia="our-story-cta"]').first();
         await btnComenzar.click({force:true});
         console.log(`[Usuario ${usuarioId}] ✅ Clic Comenzar`);
@@ -1391,6 +1438,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 🔒 6. CONTRASEÑA Y PASOS INTERMEDIOS
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
+        console.log("🔎 PASO 4: Ingresando contraseña...");
         const btnEnviarEnlace = pagina.locator('button:has-text("Enviar enlace")').first();
         if (await btnEnviarEnlace.isVisible({timeout:3500}).catch(() => false)) {
             await btnEnviarEnlace.click({force:true}).catch(() => {});
@@ -1406,7 +1454,13 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         }
 
         const pass = pagina.locator('input[type="password"], input[name="password"], input[placeholder*="Contraseña"]').first();
-        await pass.waitFor({state:'visible', timeout:25000});
+        try {
+            await pass.waitFor({state:'visible', timeout:15000});
+        } catch(ePass) {
+            console.error("❌ NO APARECIÓ campo de contraseña");
+            await tomarCapturaError("No apareció el campo de contraseña");
+            throw ePass;
+        }
         await pass.click({force:true});
         await pass.fill('', {force:true});
         await pass.type(cuenta.pass, {delay: aleatorio(80, 110), force:true});
@@ -1424,6 +1478,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 📺 8. PLAN PREMIUM
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
+        console.log("🔎 PASO 5: Seleccionando plan Premium...");
         const btnVerPlanes = pagina.locator('button:has-text("Siguiente"), button:has-text("Ver los planes"), button:has-text("Continuar")').first();
         if (await btnVerPlanes.isVisible({timeout:5000}).catch(() => false)) {
             await btnVerPlanes.click({force:true}).catch(() => {});
@@ -1446,7 +1501,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 💳 9. SELECCIONAR TARJETA DE CRÉDITO O DÉBITO
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        console.log(`[Usuario ${usuarioId}] ⏳ Seleccionando opción Tarjeta...`);
+        console.log("🔎 PASO 6: Seleccionando opción Tarjeta de crédito o débito...");
 
         let seleccionoTarjeta = false;
         for (let reintento = 1; reintento <= 5; reintento++) {
@@ -1507,10 +1562,17 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 📝 10. LLENADO DE DATOS DE LA TARJETA
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
+        console.log("🔎 PASO 7: Llenando datos de tarjeta...");
 
         // 1. Número de Tarjeta
         const num = pagina.locator('input[name="creditCardNumber"], input[name="cardNumber"], input[id*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[autocomplete="cc-number"], input[placeholder*="Número"], input[placeholder*="Card number"]').first();
-        await num.waitFor({state:'visible', timeout:30000});
+        try {
+            await num.waitFor({state:'visible', timeout:15000});
+        } catch(eNum) {
+            console.error("❌ NO APARECIÓ campo de número de tarjeta");
+            await tomarCapturaError("No apareció campo de número de tarjeta");
+            throw eNum;
+        }
         await num.scrollIntoViewIfNeeded().catch(() => {});
         await num.click({force:true});
         await num.fill('', {force:true});
@@ -1610,6 +1672,7 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 5. ⬇️ ACEPTAR TÉRMINOS Y CONDICIONES
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
+        console.log("🔎 PASO 8: Aceptando términos y procesando pago...");
         await pagina.evaluate(() => {
             window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
             const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
@@ -1646,7 +1709,14 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
             'button[type="submit"]'
         ].join(', ')).first();
 
-        await pagar.waitFor({ state: 'visible', timeout: 35000 });
+        try {
+            await pagar.waitFor({ state: 'visible', timeout: 15000 });
+        } catch(ePagarWait) {
+            console.error("❌ Botón de pago no visible");
+            await tomarCapturaError("Botón de pago no visible");
+            throw ePagarWait;
+        }
+
         await pagar.scrollIntoViewIfNeeded().catch(() => {});
         try {
             await pagar.click({ force: true, timeout: 8000 });
@@ -1676,88 +1746,4 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                     );
                 } else {
                     await ctx.reply(
-                        "❌ NO SE PUDO PROCESAR EL PAGO\n\n" +
-                        "⚠️ Netflix no pudo procesar esta tarjeta (**" + cuenta.tarjeta.slice(-4) + ").\n" +
-                        "💡 Intenta con OTRA tarjeta.\n\n" +
-                        "🔄 Sesión reiniciada. Escribe /start para volver a empezar."
-                    );
-                }
-            } catch(e) {}
-
-            sesionesUsuario.delete(usuarioId);
-            if (navegador) await navegador.close().catch(() => {});
-            return 'TARJETA_RECHAZADA';
-        }
-
-        // Si aparece algún botón final como "Continuar", "Siguiente" o "Empezar a ver"
-        const btnFinal = pagina.locator('button:has-text("Continuar"), button:has-text("Siguiente"), button:has-text("Empezar a ver"), a:has-text("Empezar a ver")').first();
-        if (await btnFinal.isVisible({ timeout: 4000 }).catch(() => false)) {
-            await btnFinal.click({ force: true }).catch(() => {});
-            await esperar(3000, usuarioId, miId);
-        }
-
-        // 📸 ÚNICO MENSAJE FINAL CON CAPTURA DE ÉXITO EN TELEGRAM
-        if (pagina && miId === ejecucionesUsuario.get(usuarioId)) {
-            try {
-                const capturaExito = await pagina.screenshot({ fullPage: false });
-                await ctx.replyWithPhoto(
-                    { source: capturaExito },
-                    {
-                        caption:
-                            "🎉 ¡CUENTA NETFLIX ACREDITADA CON ÉXITO!\n\n" +
-                            "📧 Correo: " + cuenta.correo + "\n" +
-                            "🔑 Contraseña: " + cuenta.pass + "\n" +
-                            "👤 Titular: " + cuenta.nombreCompleto + "\n" +
-                            "💳 Tarjeta: **" + cuenta.tarjeta.slice(-4) + "\n\n" +
-                            "✅ Proceso finalizado y navegador cerrado."
-                    }
-                );
-            } catch(eScreen) {
-                console.error("No se pudo enviar la captura de éxito:", eScreen);
-            }
-        }
-
-        await esperar(2000, usuarioId, miId);
-        return true;
-
-    } catch(err) {
-        console.error(`[Usuario ${usuarioId}] Error en flujoUsuarioIndependiente:`, err.message || err);
-        throw err;
-    } finally {
-        if(navegador) {
-            try {
-                await navegador.close().catch(() => {});
-            } catch(e) {}
-            navegadoresActivos.delete(usuarioId);
-        }
-    }
-}
-
-// 🛡️ MANEJO DE SEÑALES PARA RENDER Y SERVIDORES CLOUD
-process.once('SIGINT', () => {
-    console.log('🛑 Recibido SIGINT, cerrando bot...');
-    bot.stop('SIGINT');
-    process.exit(0);
-});
-
-process.once('SIGTERM', () => {
-    console.log('🛑 Recibido SIGTERM, cerrando bot...');
-    bot.stop('SIGTERM');
-    process.exit(0);
-});
-
-function iniciarBotTelegram() {
-    bot.launch({
-        dropPendingUpdates: true,
-        polling: {
-            timeout: 3000
-        }
-    })
-    .then(() => console.log(`✅ Bot corriendo en puerto ${PUERTO} | Proxy: MÉXICO 🇲🇽 (Capacidad: 8 concurrentes)`))
-    .catch(err => {
-        console.error("⚠️ Fallo en conexión de Telegram. Reintentando en 2 segundos...", err.message || err);
-        setTimeout(iniciarBotTelegram, 2000);
-    });
-}
-
-iniciarBotTelegram();
+                        "❌ NO SE PUDO PROCESAR EL PAGO\n\n"
