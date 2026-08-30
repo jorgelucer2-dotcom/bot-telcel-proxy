@@ -806,7 +806,7 @@ function locatorSeguro(pagina, clave) {
         paquete200: 'text="Amigo Sin Límite $200", text="$200"',
         botonLoQuiero200: 'b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, b:has-text("Lo quiero"), div:has-text("Amigo Sin Límite $200") b:has-text("Lo quiero"), div:has-text("$200") b:has-text("Lo quiero"), button:has-text("Lo quiero")',
         // Paso 3: Número celular 10 dígitos (input#id-phone-p)
-        telefono: 'input#id-phone-p, input#id-phone, section:has(h2:has-text("Número celular")) input, input[type="tel"][name="phone"], input[type="tel"]',
+        telefono: 'input#id-phone-p',
         // Paso 4: Botón Continuar activado morado
         botonContinuarTel: 'button.fontBoldAMX:has-text("Continuar"), button.bg-\[\#7b1fa2\]:has-text("Continuar"), button:has-text("Continuar"), button[type="submit"]',
         // Paso 5: 16 dígitos tarjeta (input#creditCardNumber)
@@ -929,56 +929,94 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await esperar(400, id, miId);
                 }
 
-                // 1) 🔍 PASO 1: VER MÁS PAQUETES
+                // 1 & 2) 🔍 PASO 1 & 2: SELECCIÓN DEL PAQUETE $200
+                const inputNumero = 'input#id-phone-p';
+
                 console.log(`[Telcel Usuario ${id}] 🔍 Paso 1: Clic en 'Ver más paquetes'...`);
                 const botonVerMas = locatorSeguro(paginaTelcel, "botonVerMas").first();
-                if (await botonVerMas.isVisible({ timeout: 15000 }).catch(() => false)) {
+                if (await botonVerMas.isVisible({ timeout: 5000 }).catch(() => false)) {
                     await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
                     await botonVerMas.click({ force: true }).catch(() => {});
                     console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes' ejecutado`);
-                }
-                await paginaTelcel.waitForSelector('text="Amigo Sin Límite $200", text="$200"', { timeout: 40000 }).catch(() => {});
-                await esperar(1500, id, miId);
-
-                // 2) 🔍 PASO 2: DAR CLIC EN 'LO QUIERO' ($200)
-                console.log(`[Telcel Usuario ${id}] 🔍 Paso 2: Clic en 'Lo quiero' ($200)...`);
-                const card200Loc = paginaTelcel.locator('div, section, article, li, mat-card').filter({ hasText: '200' });
-                const btn200Loc = card200Loc.locator('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, button, a, [role="button"], b').filter({ hasText: /lo quiero|comprar|elegir|recargar/i }).first();
-                if (await btn200Loc.isVisible({ timeout: 4000 }).catch(() => false)) {
-                    await btn200Loc.scrollIntoViewIfNeeded().catch(() => {});
-                    await btn200Loc.click({ force: true, timeout: 5000 }).catch(() => {});
-                    console.log(`[Telcel Usuario ${id}] ✅ Clic en botón 'Lo quiero' de $200 ejecutado`);
                 } else {
                     await paginaTelcel.evaluate(() => {
-                        const elementos = Array.from(document.querySelectorAll('*'));
-                        const nodos200 = elementos.filter(el => (el.innerText || '').includes('Amigo Sin Límite $200') || (el.innerText || '').includes('$200'));
-                        for (const nodo of nodos200.reverse()) {
-                            const btn = nodo.querySelector('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, button, a, [role="button"], b, div[class*="btn"]') ||
-                                        nodo.closest('div, section, article, li')?.querySelector('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, button, a, [role="button"], b, div[class*="btn"]');
-                            if (btn && (btn.innerText || '').toLowerCase().includes('quiero')) {
-                                btn.scrollIntoView({ block: 'center' });
-                                ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
-                                    btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
-                                });
-                                if (typeof btn.click === 'function') btn.click();
-                                return true;
-                            }
+                        const btns = Array.from(document.querySelectorAll('button, div[role="button"], a, p'));
+                        const btn = btns.find(b => (b.innerText || '').toLowerCase().includes('ver más paquetes'));
+                        if (btn) {
+                            const target = btn.closest('button, div[role="button"]') || btn;
+                            target.scrollIntoView({ block: 'center' });
+                            if (typeof target.click === 'function') target.click();
                         }
-                        return false;
-                    }).catch(() => false);
+                    }).catch(() => {});
                 }
 
-                await enviarLimpio(ctx, "✅ **PAQUETE $200 SELECCIONADO**\nIngresando número celular...");
+                await esperar(1500, id, miId);
 
-                // 3) 📱 PASO 3: DAR CLIC Y LLENAR NÚMERO A 10 DÍGITOS (input#id-phone-p)
-                const campoTel = locatorSeguro(paginaTelcel, "telefono").first();
-                try {
-                    await campoTel.waitFor({ state: "visible", timeout: 35000 });
-                } catch(eWaitTel) {
-                    console.error(`[Telcel Diagnóstico] Timeout en campo teléfono. URL: ${paginaTelcel.url()} | Título: ${await paginaTelcel.title().catch(() => '')}`);
-                    throw eWaitTel;
+                console.log(`[Telcel Usuario ${id}] 🔍 Paso 2: Seleccionando 'Lo quiero' ($200)...`);
+
+                // Ejecución precisa en DOM para ubicar la tarjeta de $200 y pulsar "Lo quiero"
+                await paginaTelcel.evaluate(() => {
+                    const todos = Array.from(document.querySelectorAll('div, section, article, li'));
+                    // Tarjetas cuyo texto contenga $200 o 200 y botón "Lo quiero"
+                    const tarjetas = todos.filter(el => {
+                        const t = (el.innerText || '');
+                        const es200 = t.includes('$200') || t.includes('Amigo Sin Límite $200') || (t.includes('200') && t.includes('Sin Límite'));
+                        const tieneLoQuiero = t.includes('Lo quiero') || el.querySelector('.Plan_buttonPackage__SY6E2, b.Plan_buttonPackageLabel__xB_jv');
+                        return es200 && tieneLoQuiero;
+                    });
+
+                    tarjetas.sort((a, b) => (a.innerText.length - b.innerText.length));
+                    const tarjeta200 = tarjetas[0];
+
+                    if (tarjeta200) {
+                        const btn = tarjeta200.querySelector('.Plan_buttonPackageContainer__dOIw6, .Plan_buttonPackage__SY6E2, b.Plan_buttonPackageLabel__xB_jv, b, button, [role="button"]');
+                        if (btn) {
+                            btn.scrollIntoView({ block: 'center' });
+                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+                                btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+                            });
+                            if (typeof btn.click === 'function') btn.click();
+                            const p = btn.closest('.Plan_buttonPackageContainer__dOIw6, .Plan_buttonPackage__SY6E2, div, button');
+                            if (p && typeof p.click === 'function') p.click();
+                            return true;
+                        }
+                    }
+
+                    // Fallback: clic en cualquier elemento que tenga 'Lo quiero'
+                    const btnsLoQuiero = Array.from(document.querySelectorAll('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, .Plan_buttonPackageContainer__dOIw6, b, button')).filter(b => (b.innerText || '').toLowerCase().includes('lo quiero'));
+                    for (const b of btnsLoQuiero) {
+                        const cont = b.closest('div, section, article') || b;
+                        if ((cont.innerText || '').includes('200')) {
+                            b.scrollIntoView({ block: 'center' });
+                            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+                                b.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+                            });
+                            if (typeof b.click === 'function') b.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }).catch(() => {});
+
+                // Intentar también con Playwright locator
+                const locBoton200 = paginaTelcel.locator('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, div:has-text("Amigo Sin Límite $200") b:has-text("Lo quiero"), div:has-text("$200") b:has-text("Lo quiero"), b:has-text("Lo quiero")').first();
+                if (await locBoton200.isVisible({ timeout: 3000 }).catch(() => false)) {
+                    await locBoton200.scrollIntoViewIfNeeded().catch(() => {});
+                    await locBoton200.click({ force: true }).catch(() => {});
                 }
 
+                // 3) ⏳ BLOQUE DE ESPERA TRAS DAR CLIC EN 'LO QUIERO' DEL PAQUETE $200
+                console.log(`[Telcel Usuario ${id}] ⏳ Esperando carga y campo de teléfono (${inputNumero})...`);
+                await paginaTelcel.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+                await paginaTelcel.waitForSelector('h2:has-text("Número celular")', { state: 'visible', timeout: 18000 }).catch(() => {});
+                await paginaTelcel.locator(inputNumero).waitFor({ state: 'visible', timeout: 18000 });
+
+                // 4) 📱 VALIDACIÓN ANTES DE LLENAR EL NÚMERO
+                if (!(await paginaTelcel.locator(inputNumero).isEnabled())) {
+                    throw new Error("CAMPO NÚMERO NO DISPONIBLE");
+                }
+
+                const campoTel = paginaTelcel.locator(inputNumero).first();
                 await campoTel.scrollIntoViewIfNeeded().catch(() => {});
                 await campoTel.click({ force: true });
                 await campoTel.fill('', { force: true });
@@ -1012,8 +1050,32 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 // 5) 💳 PASO 5: INTRODUCIR 16 DÍGITOS DE TARJETA (input#creditCardNumber)
                 await enviarLimpio(ctx, "📝 **Llenando datos de tarjeta...**");
 
-                const inputCC = locatorSeguro(paginaTelcel, "tarjeta").first();
-                await inputCC.waitFor({ state: 'visible', timeout: 25000 });
+                let inputCC = null;
+                const selectoresCC = [
+                    'input#creditCardNumber',
+                    'input[placeholder*="16 dígitos" i]',
+                    'input[name="cardNumber"][inputmode="numeric"]',
+                    'input[name="cardNumber"]',
+                    'input[name*="creditCardNumber"]',
+                    'input[id="id_creditCardNumber"]'
+                ];
+
+                for (let intentoCC = 0; intentoCC < 15; intentoCC++) {
+                    for (const s of selectoresCC) {
+                        const loc = paginaTelcel.locator(s).first();
+                        if (await loc.isVisible({ timeout: 1000 }).catch(() => false)) {
+                            inputCC = loc;
+                            break;
+                        }
+                    }
+                    if (inputCC) break;
+                    await esperar(1500, id, miId);
+                }
+
+                if (!inputCC) {
+                    throw new Error("No se visualizó el campo de número de tarjeta.");
+                }
+
                 await inputCC.scrollIntoViewIfNeeded().catch(() => {});
                 await inputCC.click({ force: true });
                 await inputCC.fill('', { force: true });
