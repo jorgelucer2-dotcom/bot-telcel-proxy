@@ -1,69 +1,17 @@
-// 📋 COMANDOS
-bot.start((ctx) => ctx.reply('🤖 Bot activo\nEscribe /recarga para empezar'));
-bot.help((ctx) => ctx.reply('📲 Usa /recarga para iniciar pago'));
+'use strict';
 
-bot.command('recarga', async (ctx) => {
-  try {
-    ctx.reply('🔄 Abriendo navegador...');
-    const browser = await chromium.launch({
-      headless: true,
-      executablePath: CHROME_PATH, // ✅ AHORA SÍ ESTÁ DEFINIDO
-      proxy: {
-        server: PROXY.server,
-        username: PROXY.username,
-        password: PROXY.password
-      },
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-    const page = await browser.newPage();
-    await page.goto('https://pay.telcel.com/package/1');
-    ctx.reply('✅ Página lista. Ingresa datos.');
-    await browser.close();
-  } catch (e) {
-    ctx.reply('❌ Error: ' + e.message);
-  }
-});
+require('dotenv').config();
+const http = require('http');
+const { exec } = require('child_process');
+const { Telegraf, Markup } = require('telegraf');
+const { chromium } = require('playwright');
 
-// 📋 COMANDOS
-bot.start((ctx) => ctx.reply('🤖 Bot activo\nEscribe /recarga para empezar'));
-bot.help((ctx) => ctx.reply('📲 Usa /recarga para iniciar pago'));
-
-bot.command('recarga', async (ctx) => {
-  try {
-    ctx.reply('🔄 Abriendo navegador...');
-    const browser = await chromium.launch({
-      headless: true,
-      executablePath: CHROME_PATH, // 📌 USAMOS LA RUTA EXACTA
-      proxy: {
-        server: PROXY.server,
-        username: PROXY.username,
-        password: PROXY.password
-      },
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    });
-
-    const page = await browser.newPage();
-    await page.goto('https://pay.telcel.com/package/1', { waitUntil: 'networkidle' });
-    await ctx.reply('✅ Página cargada. Ingresa datos:');
-
-    // ... tu lógica de recarga aquí ...
-
-    await browser.close();
-  } catch (err) {
-    ctx.reply('❌ Error: ' + err.message);
-    console.error(err);
-  }
-});
-
-// 🚀 INICIAR SERVIDOR PARA RENDER
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('Bot activo');
-}).listen(PORT, () => console.log(🌐 Puerto ${PORT}));
-
-bot.launch();
-console.log('🤖 Bot corriendo...');
+// 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
+const PROXY = {
+  server: "http://brd.superproxy.io:44445",
+  username: "brd-customer-hl_49d1a9d2-zone-isp_proxy1",
+  password: "ad8cde63-a718-47f6-a2b3-7a50049c4d61"
+};
 
 // 📡 PUERTO OBLIGATORIO PARA RENDER / SERVICIOS CLOUD
 const PUERTO = process.env.PORT || 3000;
