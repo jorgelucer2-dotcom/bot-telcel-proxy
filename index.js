@@ -1,9 +1,9 @@
 'use strict';
 
+process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 const http = require('http');
-const { exec } = require('child_process');
 require('dotenv').config();
 
 // 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
@@ -1041,10 +1041,6 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         // 🧹 RESTAURAR ESTADO Y MEMORIA TOTAL DE ESTE USUARIO
         await liberarUsuario(id, ctx);
         console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados al 100%.`);
-
-        // ✅ CERRAR TERMINAL POWERSHELL AUTOMÁTICAMENTE
-        exec('taskkill /F /IM node.exe /T', () => {}); // Cierra todo proceso Node
-        exec('exit', () => {}); // Cierra la ventana de terminal
     }
 });
 
@@ -1760,4 +1756,5 @@ function iniciarBotTelegram() {
 }
 
 iniciarBotTelegram();
+
 
