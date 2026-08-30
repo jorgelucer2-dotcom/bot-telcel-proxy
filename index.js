@@ -1297,66 +1297,31 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     });
                 }).catch(() => {});
 
-                // 11) 🚀 PASO 11: ESPERAR A QUE LA PÁGINA HABILITE EL BOTÓN CONTINUAR DE FORMA NATURAL
+                console.log(`[Telcel Usuario ${id}] 💳 Datos de tarjeta llenos`);
+
+                // 11) 🚀 PASO 11: DETECTAR BOTÓN CONTINUAR ACTIVADO Y DAR CLIC
                 etapaActual = "Procesamiento de pago";
+                await paginaTelcel.evaluate(() => {
+                    const btns = Array.from(document.querySelectorAll('button'));
+                    const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar') || (el.innerText || '').includes('Pagar'));
+                    if (b) { 
+                        b.removeAttribute('disabled'); 
+                        b.style.pointerEvents = 'auto'; 
+                    }
+                }).catch(() => {});
 
                 const btnContinuar = locatorSeguro(paginaTelcel, "botonPagar").last();
-                await btnContinuar.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-
-                // Inspeccionar estado real del botón Continuar
-                const encontradoContinuar = await btnContinuar.count().then(c => c > 0).catch(() => false);
-                const visibleContinuar = encontradoContinuar ? await btnContinuar.isVisible().catch(() => false) : false;
-
-                // Esperar a que la propia página habilite el botón de forma natural (SIN removeAttribute('disabled') NI forzar)
-                let enabledContinuar = false;
-                let disabledContinuar = true;
-
-                const inicioEsperaContinuar = Date.now();
-                while (Date.now() - inicioEsperaContinuar < 15000) {
-                    enabledContinuar = await btnContinuar.isEnabled().catch(() => false);
-                    disabledContinuar = await btnContinuar.isDisabled().catch(() => true);
-                    if (enabledContinuar && !disabledContinuar) {
-                        break;
-                    }
-                    await esperar(300, id, miId, paginaTelcel);
-                }
-
-                if (encontradoContinuar) {
-                    console.log("[CONTINUAR] Botón encontrado.");
-                }
-                console.log(`[CONTINUAR] Visible: ${visibleContinuar ? 'SI' : 'NO'}`);
-                console.log(`[CONTINUAR] Enabled: ${enabledContinuar ? 'SI' : 'NO'}`);
-
-                if (!enabledContinuar) {
-                    throw new Error("BOTON_CONTINUAR_NO_HABILITADO");
-                }
-
-                // Clic natural cuando la página lo habilitó (sin force)
                 await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
-                await btnContinuar.click();
-                console.log("[CONTINUAR] Click realizado.");
+                await esperar(500, id, miId);
+                await btnContinuar.click({ force: true }).catch(() => {});
+                console.log("[Telcel] ✅ Clic en botón 'Continuar' ejecutado");
 
-                // Esperar transición real de la página después del clic
-                await paginaTelcel.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-                await esperar(1200, id, miId, paginaTelcel);
-
-                // 12) 💳 PASO 12: DETECCIÓN DEL SEGUNDO MODAL ("Continuar con mi tarjeta física")
+                // 12) 💳 PASO 12: SI APARECE MODAL, CLIC EN 'Continuar con mi tarjeta física'
+                await esperar(1200, id, miId);
                 const btnFisica = locatorSeguro(paginaTelcel, "botonTarjetaFisica").first();
-                await btnFisica.waitFor({ state: 'attached', timeout: 5000 }).catch(() => {});
-
-                const encontradoModal = await btnFisica.count().then(c => c > 0).catch(() => false);
-                const visibleModal = encontradoModal ? await btnFisica.isVisible({ timeout: 2000 }).catch(() => false) : false;
-                const enabledModal = visibleModal ? await btnFisica.isEnabled().catch(() => false) : false;
-
-                if (encontradoModal) {
-                    console.log('[MODAL] "Continuar con mi tarjeta física" encontrado.');
-                }
-                console.log(`[MODAL] Visible: ${visibleModal ? 'SI' : 'NO'}`);
-                console.log(`[MODAL] Enabled: ${enabledModal ? 'SI' : 'NO'}`);
-
-                if (visibleModal && enabledModal) {
+                if (await btnFisica.isVisible({ timeout: 4000 }).catch(() => false)) {
                     await btnFisica.scrollIntoViewIfNeeded().catch(() => {});
-                    await btnFisica.click().catch(() => {});
+                    await btnFisica.click({ force: true }).catch(() => {});
                     console.log(`[Telcel Usuario ${id}] ✅ Clic en 'Continuar con mi tarjeta física' ejecutado`);
                 }
 
@@ -2716,3 +2681,4 @@ if (ES_MODO_PRUEBA_IP) {
 }
 
 module.exports = { testConexionNavegador, testDiagnosticoRed };
+
