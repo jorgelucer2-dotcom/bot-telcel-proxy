@@ -36,6 +36,18 @@ servidorHttp.listen(PUERTO, '0.0.0.0', () => {
     console.log(`📡 Servidor HTTP activo y escuchando en 0.0.0.0:${PUERTO} (Render compatible)`);
 });
 
+// 🔄 AUTO-INSTALADOR DE CHROMIUM SI FALTA EN RENDER / LINUX
+if (process.platform === 'linux' || process.env.RENDER) {
+    try {
+        console.log("🔍 Verificando/Instalando binarios de Chromium para Render...");
+        const { execSync } = require('child_process');
+        execSync('npx playwright install chromium --with-deps', { stdio: 'inherit', timeout: 120000 });
+        console.log("✅ Binarios de Chromium verificados correctamente");
+    } catch (err) {
+        console.log("ℹ️ Verificación de Chromium:", err.message || err);
+    }
+}
+
 // --------------------------------------------------
 // 🛡️ PROTECCIÓN GLOBAL CONTRA CAÍDAS DE NODE.JS
 // --------------------------------------------------
