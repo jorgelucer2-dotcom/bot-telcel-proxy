@@ -4,10 +4,12 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build": "npx playwright install chromium",
-    "postinstall": "npx playwright install chromium",
+    "build": "npm install && npx playwright install --with-deps chromium",
     "dev": "node --watch index.js",
     "watch": "node --watch index.js"
+  },
+  "engines": {
+    "node": "20.x"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
@@ -15,6 +17,8 @@
     "telegraf": "^4.16.3"
   }
 }
+
+
 
 
 
