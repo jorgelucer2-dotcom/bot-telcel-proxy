@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "build": "npx playwright install chromium --with-deps",
+    "build": "npx playwright install chromium",
     "postinstall": "npx playwright install chromium",
     "dev": "node --watch index.js",
     "watch": "node --watch index.js"
