@@ -13,7 +13,7 @@ const ES_HEADLESS = process.env.RENDER === 'true' || process.env.HEADLESS === 't
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8848937586:AAF5ARZdluPDkxtxhmtoay8v7QVD7wTXQ4E';
 const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
-const URL_NETFLIX = process.env.URL_NETFLIX || 'https://netflix.com/mx/';
+const URL_NETFLIX = process.env.URL_NETFLIX || 'https://www.netflix.com/mx/';
 const MONTO_TELCEL = 200;
 const TIEMPO_MAX_COMANDO = 240000; // 4 minutos límite por proceso para evitar cuelgues
 const MAX_USUARIOS = 8;
@@ -570,12 +570,14 @@ async function lanzarNavegador({ id, slowMo = 50, geolocation = null }) {
     const contextOptions = {
         viewport: null,
         locale: 'es-MX',
+        timezoneId: 'America/Mexico_City',
+        extraHTTPHeaders: {
+            'Accept-Language': 'es-MX,es;q=0.9,es-419;q=0.8,en;q=0.5'
+        },
+        geolocation: geolocation || { latitude: 19.4326, longitude: -99.1332 },
+        permissions: ['geolocation', 'notifications'],
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
     };
-    if (geolocation) {
-        contextOptions.geolocation = geolocation;
-        contextOptions.permissions = ['geolocation', 'notifications'];
-    }
 
     const contexto = await navegador.newContext(contextOptions);
     contexto.setDefaultTimeout(240000);
@@ -617,6 +619,9 @@ async function navegarSeguro(pagina, url, navegadorRef) {
 // 🎯 ACCIONES BOTONES TELCEL (CONFIRMACIÓN)
 bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_telcel', /^pagar[T_t]elcel/], async ctx => {
     await ctx.answerCbQuery().catch(() => {});
+    // 🧹 Eliminar botones virtuales inmediatamente para evitar dobles clics
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+
     const id = ctx.chat.id;
 
     let numero, cc, mes, anio, cvv, nombre;
@@ -654,6 +659,40 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
     flujoTelcelIndependiente(ctx, id, { numero, cc, mes, anio, cvv, nombre }).catch(err => {
         console.error(`[Telcel Usuario ${id}] Error en ejecución:`, err.message || err);
     });
+});
+
+// 🔄 HANDLER PARA NUEVA RECARGA
+bot.action('nueva_recarga_telcel', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    await liberarUsuario(id, ctx);
+    sesiones.recarga.set(id, { paso: 1 });
+    await ctx.reply(
+        `💰 RECARGA TELCEL $${MONTO_TELCEL} MXN\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📲 Escribe el NÚMERO TELCEL a 10 dígitos o envía todo en una línea:\n` +
+        `👉 /recarga 5512345678 4111111111111111|12|2028|123`,
+        Markup.removeKeyboard()
+    );
+});
+
+// 🔄 HANDLER PARA NUEVA CUENTA NETFLIX
+bot.action('nueva_cuenta_netflix', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    await liberarUsuario(id, ctx);
+    sesiones.netflix.set(id, { paso: 'menu_netflix' });
+    await ctx.reply(
+        '🎬 NETFLIX: ¿Cómo deseas crear la cuenta? 👇\n' +
+        '━━━━━━━━━━━━━━━━\n' +
+        'Elige el método de datos:',
+        Markup.inlineKeyboard([
+            [Markup.button.callback("🎲 Automático", "netAuto")],
+            [Markup.button.callback("✍️ Personalizado", "netPerso")]
+        ])
+    );
 });
 
 async function flujoTelcelIndependiente(ctx, id, datos) {
@@ -717,54 +756,63 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             await esperar(400, id, miId);
         }
 
-        // 1. VERIFICAR SI YA ESTÁ EL CAMPO DE TELÉFONO EN PANTALLA
+        // 1. 🔍 BÚSQUEDA Y SELECCIÓN ESTRICTA DEL PAQUETE $200
+        console.log(`[Telcel Usuario ${id}] 🔍 Buscando y seleccionando Paquete $200...`);
         const selectorTel = 'input#id-phone, input[type="tel"], input[placeholder*="número" i], input[placeholder*="Ingresa" i], input[name="phone"], input[name*="phone"]';
         const telDirecto = paginaTelcel.locator(selectorTel).first();
-        const telYaVisible = await telDirecto.isVisible({ timeout: 2000 }).catch(() => false);
 
-        if (!telYaVisible) {
-            // ABRIR PAQUETES SI ES NECESARIO
-            const btnVerMas = paginaTelcel.locator('button:has-text("Ver más paquetes"), button:has-text("Ver más"), p:has-text("Ver más paquetes")').first();
-            if (await btnVerMas.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await btnVerMas.click({ force: true }).catch(() => {});
-                await esperar(400, id, miId);
+        // 1.1 Si existe botón "Ver más paquetes", hacer clic para desplegarlos todos
+        const btnVerMas = paginaTelcel.locator('button:has-text("Ver más paquetes"), button:has-text("Ver más"), p:has-text("Ver más paquetes"), a:has-text("Ver más paquetes"), a:has-text("Ver más")').first();
+        if (await btnVerMas.isVisible({ timeout: 2500 }).catch(() => false)) {
+            await btnVerMas.scrollIntoViewIfNeeded().catch(() => {});
+            await btnVerMas.click({ force: true }).catch(() => {});
+            console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes'`);
+            await esperar(800, id, miId);
+        }
+
+        let selecciono200 = false;
+        for (let intento = 0; intento < 5; intento++) {
+            if (miId !== ejecucionesUsuario.get(id)) throw new Error("PROCESO_REINICIADO");
+
+            // Scroll gradual para cargar y hacer visible la tarjeta de $200
+            await paginaTelcel.evaluate((i) => window.scrollTo(0, i * 250), intento);
+            await esperar(400, id, miId);
+
+            // Búsqueda específica y estricta en el DOM de la tarjeta que contiene $200
+            selecciono200 = await paginaTelcel.evaluate(() => {
+                const elementos = Array.from(document.querySelectorAll('div, section, article, li'));
+                
+                // Encontrar la tarjeta específica que tenga $200 y el botón 'Lo quiero'
+                const card200 = elementos.find(el => {
+                    const txt = (el.innerText || '');
+                    const tiene200 = txt.includes('$200') || (txt.includes('200') && (txt.includes('Amigo') || txt.includes('Paquete') || txt.includes('Sin Límite') || txt.includes('30 días') || txt.includes('MB') || txt.includes('GB')));
+                    const tieneBoton = txt.includes('Lo quiero') || txt.includes('Comprar') || txt.includes('Seleccionar');
+                    return tiene200 && tieneBoton && el.children.length < 15;
+                });
+
+                if (card200) {
+                    const btn = card200.querySelector('button, a, [role="button"], b, div[class*="btn"], div[class*="button"]');
+                    if (btn) {
+                        btn.scrollIntoView({ block: 'center' });
+                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
+                            btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
+                        });
+                        if (typeof btn.click === 'function') btn.click();
+                        return true;
+                    }
+                }
+                return false;
+            }).catch(() => false);
+
+            if (selecciono200) {
+                console.log(`[Telcel Usuario ${id}] ✅ Botón 'Lo quiero' del paquete $200 clickeado exitosamente.`);
+                await esperar(1500, id, miId);
+                break;
             }
 
-            // Scroll para cargar paquetes
-            await paginaTelcel.evaluate(() => window.scrollTo(0, 400));
-            await esperar(300, id, miId);
-
-            // BÚSQUEDA Y CLIC EN PAQUETE $200 (CON REINTENTO)
-            for (let intento = 0; intento < 3; intento++) {
-                // Estrategia 1: Buscar botón "Lo quiero" dentro del bloque de $200
-                const card200 = paginaTelcel.locator('div, section, article').filter({ hasText: '$200' }).filter({ has: paginaTelcel.locator('button:has-text("Lo quiero"), b:has-text("Lo quiero")') }).last();
-                if (await card200.isVisible({ timeout: 2000 }).catch(() => false)) {
-                    await card200.scrollIntoViewIfNeeded().catch(() => {});
-                    const btn = card200.locator('button:has-text("Lo quiero"), button, b:has-text("Lo quiero")').first();
-                    await btn.click({ force: true }).catch(() => {});
-                } else {
-                    // Estrategia 2: Clic vía DOM nativo
-                    await paginaTelcel.evaluate(() => {
-                        const all = Array.from(document.querySelectorAll('div, section, article'));
-                        for (const el of all) {
-                            const txt = el.innerText || '';
-                            if (txt.includes('$200') && txt.includes('Lo quiero') && el.children.length < 15) {
-                                const b = el.querySelector('button, [role="button"], b');
-                                if (b) { b.scrollIntoView(); b.click(); return true; }
-                            }
-                        }
-                        const btnLoQuiero = Array.from(document.querySelectorAll('button, b')).find(b => (b.innerText || '').includes('Lo quiero'));
-                        if (btnLoQuiero) { btnLoQuiero.click(); return true; }
-                        return false;
-                    }).catch(() => false);
-                }
-
-                // Verificar si apareció el campo de teléfono
-                if (await telDirecto.isVisible({ timeout: 3000 }).catch(() => false)) {
-                    break;
-                }
-                await paginaTelcel.evaluate(() => window.scrollBy(0, 300));
-                await esperar(500, id, miId);
+            // Si el campo de teléfono ya está en pantalla y ya se hizo clic
+            if (await telDirecto.isVisible({ timeout: 1500 }).catch(() => false)) {
+                break;
             }
         }
 
@@ -1009,12 +1057,25 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             }
 
             if (captura) {
-                await ctx.replyWithPhoto({ source: captura }, { caption: mensajeCaption.slice(0, 1024) }).catch(() => {});
+                await ctx.replyWithPhoto(
+                    { source: captura },
+                    {
+                        caption: mensajeCaption.slice(0, 1024),
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
+                            [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                        ])
+                    }
+                ).catch(() => {});
             } else {
-                await ctx.reply(mensajeCaption);
+                await ctx.reply(
+                    mensajeCaption,
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
+                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                    ])
+                );
             }
-
-            await ctx.reply("🔄 Proceso finalizado. Puedes iniciar de nuevo con /recarga");
         }
 
         // ⏱️ TIEMPO ADICIONAL: Esperar 20 segundos con el navegador abierto antes de cerrar para que el usuario pueda ver
@@ -1029,7 +1090,13 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
         if (esCierreManual) {
             console.log(`[Telcel Usuario ${id}] 🔄 Cierre manual detectado. Restaurando todo el proceso...`);
             if (miId === ejecucionesUsuario.get(id)) {
-                await ctx.reply("🔄 Ventana cerrada. Se ha restaurado todo el proceso correctamente.\n👉 Escribe /recarga para iniciar de nuevo.");
+                await ctx.reply(
+                    "🔄 Ventana cerrada. Se ha restaurado todo el proceso correctamente.",
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
+                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                    ])
+                );
             }
         } else {
             console.error("❌ ERROR Telcel:", errTelcel);
@@ -1046,8 +1113,11 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                                     `❌ ERROR EN EL PROCESO TELCEL ❌\n\n` +
                                     `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n` +
                                     `📍 URL: ${paginaTelcel.url().slice(0, 100)}\n\n` +
-                                    `🔄 Sesión reseteada automáticamente.\n` +
-                                    `👉 Escribe /recarga para intentar de nuevo.`
+                                    `🔄 Sesión reseteada automáticamente.`,
+                                ...Markup.inlineKeyboard([
+                                    [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                                    [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                                ])
                             }
                         ).catch(() => {});
                     }
@@ -1056,8 +1126,11 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await ctx.reply(
                         `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
                         `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n\n` +
-                        `🔄 Sesión reseteada automáticamente.\n` +
-                        `👉 Escribe /recarga para intentar de nuevo.`
+                        `🔄 Sesión reseteada automáticamente.`,
+                        Markup.inlineKeyboard([
+                            [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                            [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                        ])
                     ).catch(() => {});
                 }
             }
@@ -1938,7 +2011,11 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                             "🔑 Contraseña: " + cuenta.pass + "\n" +
                             "👤 Titular: " + cuenta.nombreCompleto + "\n" +
                             "💳 Tarjeta: **" + cuenta.tarjeta.slice(-4) + "\n\n" +
-                            "✅ Proceso finalizado y navegador cerrado."
+                            "✅ Proceso finalizado y navegador cerrado.",
+                        ...Markup.inlineKeyboard([
+                            [Markup.button.callback('🎬 Nueva Cuenta Netflix', 'nueva_cuenta_netflix')],
+                            [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                        ])
                     }
                 );
             } catch(eScreen) {
@@ -1964,8 +2041,11 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                                 `❌ ERROR EN EL PROCESO NETFLIX ❌\n\n` +
                                 `💬 Motivo: ${(err.message || 'Error inesperado').slice(0, 150)}\n` +
                                 `📍 URL: ${pagina.url().slice(0, 100)}\n\n` +
-                                `🔄 Sesión reseteada automáticamente.\n` +
-                                `👉 Escribe /netflix para intentar de nuevo.`
+                                `🔄 Sesión reseteada automáticamente.`,
+                            ...Markup.inlineKeyboard([
+                                [Markup.button.callback('🎬 Intentar Nueva Cuenta', 'nueva_cuenta_netflix')],
+                                [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                            ])
                         }
                     ).catch(() => {});
                 }
@@ -1974,8 +2054,11 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                 await ctx.reply(
                     `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
                     `💬 Motivo: ${(err.message || 'Error inesperado').slice(0, 150)}\n\n` +
-                    `🔄 Sesión reseteada automáticamente.\n` +
-                    `👉 Escribe /netflix para intentar de nuevo.`
+                    `🔄 Sesión reseteada automáticamente.`,
+                    Markup.inlineKeyboard([
+                        [Markup.button.callback('🎬 Intentar Nueva Cuenta', 'nueva_cuenta_netflix')],
+                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                    ])
                 ).catch(() => {});
             }
         }
@@ -2040,4 +2123,3 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
     .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
-
