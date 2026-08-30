@@ -728,6 +728,7 @@ async function lanzarNavegador({ id, slowMo = 50, geolocation = null }) {
         };
  
         contexto = await navegador.newContext(contextOptions);
+        await contexto.grantPermissions(['geolocation'], { origin: 'https://pay.telcel.com' }).catch(() => {});
         pagina = await contexto.newPage();
  
     // 3. ERROR SI NO HAY CONFIGURACIÓN (SIN FALLBACK SILENCIOSO)
@@ -866,7 +867,7 @@ bot.action('nueva_cuenta_netflix', async ctx => {
 // 🎯 MAPEO CENTRALIZADO Y SEGURO DE SELECTORES (AUTOPROTECCIÓN)
 function locatorSeguro(pagina, clave) {
     const mapaSelectores = {
-        botonPermitir: 'button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido")',
+        botonPermitir: 'button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir siempre"), button:has-text("Compartir mi ubicación"), button:has-text("Usar mi ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido"), button:has-text("Activar ubicación"), [aria-label*="Permitir" i], [aria-label*="Ubicación" i]',
         // Paso 1: Ver más paquetes (Button específico que contiene el texto "Ver más paquetes")
         botonVerMas: 'button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")',
         // Paso 2: Lo quiero de $200
@@ -895,6 +896,37 @@ function locatorSeguro(pagina, clave) {
  
     const selector = mapaSelectores[clave] || clave;
     return pagina.locator(selector);
+}
+
+// 📍 GESTIÓN AUTOMÁTICA Y PERMANENTE DE PERMISOS DE UBICACIÓN
+async function aceptarUbicacionSiAparece(pagina) {
+    if (!pagina || (typeof pagina.isClosed === 'function' && pagina.isClosed())) return false;
+    const selectoresPermiso = [
+        'button:has-text("Permitir mientras visito el sitio")',
+        'button:has-text("Permitir ubicación")',
+        'button:has-text("Permitir siempre")',
+        'button:has-text("Compartir mi ubicación")',
+        'button:has-text("Usar mi ubicación")',
+        'button:has-text("Permitir")',
+        'button:has-text("Aceptar")',
+        'button:has-text("Acepto")',
+        'button:has-text("Entendido")',
+        'button:has-text("Activar ubicación")',
+        '[aria-label*="Permitir" i]',
+        '[aria-label*="Ubicación" i]'
+    ];
+
+    for (const s of selectoresPermiso) {
+        try {
+            const btn = pagina.locator(s).first();
+            if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+                await btn.click({ force: true }).catch(() => {});
+                console.log(`[Telcel] 📍 Ubicación aceptada automáticamente (${s})`);
+                return true;
+            }
+        } catch(e) {}
+    }
+    return false;
 }
  
 // 🧼 LIMPIEZA TOTAL Y REINICIO (AUTOPROTECCIÓN DE MEMORIA)
@@ -1085,14 +1117,14 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 });
  
                 paginaTelcel.on('dialog', async dialog => {
+                    console.log(`[Telcel] 📍 Diálogo emergente detectado (${dialog.type()}): aceptando automáticamente...`);
                     await dialog.accept().catch(() => {});
                 });
  
                 paginaTelcel.on('popup', async popup => {
-                    const btn = popup.locator('button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar")').first();
-                    if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-                        await btn.click({ force: true }).catch(() => {});
-                    }
+                    console.log(`[Telcel] 📍 Ventana emergente detectada: aceptando ubicación siempre...`);
+                    await aceptarUbicacionSiAparece(popup);
+                    await popup.close().catch(() => {});
                 });
  
                 // 🌐 NAVEGACIÓN A TELCEL
@@ -1102,21 +1134,16 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
  
                 await esperar(500, id, miId, paginaTelcel);
  
-                // ✅ Permiso ubicación automático
-                const btnPermitir = locatorSeguro(paginaTelcel, "botonPermitir").first();
-                if (await btnPermitir.isVisible({ timeout: 3000 }).catch(() => false)) {
-                    await btnPermitir.click({ force: true }).catch(() => {});
-                    console.log("[Telcel] 📍 Permiso de ubicación aceptado");
-                    await esperar(400, id, miId);
-                } else {
-                    console.log("[Telcel] 📍 Permiso de ubicación no requerido / no apareció");
-                }
+                // ✅ Permiso ubicación automático permanente
+                await aceptarUbicacionSiAparece(paginaTelcel);
  
                 // 1 & 2) 🔍 PASO PREVIO OBLIGATORIO: VER MÁS PAQUETES Y SELECCIÓN DE PAQUETE
                 etapaActual = "Apertura de paquetes adicionales";
+                await aceptarUbicacionSiAparece(paginaTelcel);
                 await abrirMasPaquetes(paginaTelcel, monto);
  
                 etapaActual = `Selección de paquete $${monto}`;
+                await aceptarUbicacionSiAparece(paginaTelcel);
                 await seleccionarPaquete(paginaTelcel, monto);
  
                 const inputNumero = 'input#id-phone-p';
@@ -1380,6 +1407,8 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                                     ])
                                 }
                             );
+                            // 💾 GUARDAR VOUCHER PERMANENTEMENTE EN TELEGRAM (NO SE BORRA)
+                            ultimoMensaje.delete(id);
                         } else {
                             await enviarLimpio(
                                 ctx,
@@ -1389,6 +1418,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                                     [Markup.button.callback('❌ Salir', 'cancelar_accion')]
                                 ])
                             );
+                            ultimoMensaje.delete(id);
                         }
                     } else {
                         // ❌ PARTE 13: SI ES ERROR, ELIMINAR PROCESANDO Y NO DEJAR CAPTURAS DE ERROR EN TELEGRAM
@@ -2341,6 +2371,8 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                         ])
                     }
                 );
+                // 💾 GUARDAR COMPROBANTE PERMANENTEMENTE EN TELEGRAM
+                ultimoMensaje.delete(usuarioId);
             } catch(eScreen) {
                 console.error("No se pudo enviar la captura de éxito:", eScreen);
             }
