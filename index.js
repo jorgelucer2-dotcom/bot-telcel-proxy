@@ -7,14 +7,13 @@ const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 require('dotenv').config();
 
-// 📁 RUTA EXPLÍCITA DE PLAYWRIGHT (SOLUCIONA "EXECUTABLE DOESN'T EXIST" EN PC Y RENDER)
-process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(__dirname, 'node_modules', '.playwright-browsers');
-
-// 📡 CONFIGURACIÓN DE PUERTO Y MODO HEADLESS (true en Render, false en PC)
+// 📡 VARIABLES DE ENTORNO Y CONFIGURACIÓN (Render y PC)
 const PUERTO = process.env.PORT || 3000;
 const ES_HEADLESS = process.env.RENDER === 'true' || process.env.HEADLESS === 'true' || (process.platform === 'linux' && process.env.HEADLESS !== 'false');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8848937586:AAF5ARZdluPDkxtxhmtoay8v7QVD7wTXQ4E';
+const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
+const URL_NETFLIX = process.env.URL_NETFLIX || 'https://netflix.com/mx/';
 const MONTO_TELCEL = 200;
 const TIEMPO_MAX_COMANDO = 240000; // 4 minutos límite por proceso para evitar cuelgues
 const MAX_USUARIOS = 8;
@@ -694,8 +693,8 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         });
 
         // 🌐 NAVEGACIÓN A TELCEL CON DETECCIÓN DE BLOQUEO
-        console.log(`[Telcel Usuario ${id}] 🌐 Abriendo https://pay.telcel.com/package/1...`);
-        await navegarSeguro(paginaTelcel, 'https://pay.telcel.com/package/1', navegadorTelcel);
+        console.log(`[Telcel Usuario ${id}] 🌐 Abriendo ${URL_TELCEL}...`);
+        await navegarSeguro(paginaTelcel, URL_TELCEL, navegadorTelcel);
         navegadorTelcel = sesionNav.navegador;
         contexto = sesionNav.contexto;
         paginaTelcel = sesionNav.pagina;
@@ -1468,8 +1467,8 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
         // 🌐 2. CARGAR NETFLIX
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        console.log("🔎 PASO 1: Cargando página...");
-        await navegarSeguro(pagina, 'https://netflix.com/mx/', navegador);
+        console.log(`🔎 PASO 1: Cargando página (${URL_NETFLIX})...`);
+        await navegarSeguro(pagina, URL_NETFLIX, navegador);
         await esperar(3000, usuarioId, miId);
         await revisarError();
 
@@ -1950,4 +1949,3 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
     .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
-
