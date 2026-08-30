@@ -899,7 +899,8 @@ async function ejecutarConReintento(fn, intentosMax = 3, id, ctx) {
             ultimoError = error;
             console.error(`[AutoProtección Usuario ${id}] ⚠️ Fallo en intento ${intento}/${intentosMax}:`, error.message || error);
             if (intento < intentosMax) {
-                await ctx.reply(`⚠️ Reintentando operación (${intento}/${intentosMax}) con navegador limpio...`).catch(() => {});
+                // ⚠️ Solo log en consola para no saturar Telegram
+                console.log(`[AutoProtección Usuario ${id}] 🔄 Reintentando (${intento + 1}/${intentosMax}) en segundo plano...`);
                 await limpiarTodoYReiniciar(id, ctx);
                 await esperar(2000, id);
             }
@@ -921,6 +922,19 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
         );
     }
 
+    // 1️⃣ UN SOLO MENSAJE INICIAL EN TELEGRAM (Inicio del flujo)
+    await enviarLimpio(
+        ctx,
+        `🔄 **Procesando recarga...**\n\n` +
+        `📱 **Número:** \`${numero}\`\n` +
+        `💰 **Monto:** $${MONTO_TELCEL} MXN\n` +
+        `💳 **Tarjeta:** ****${cc.slice(-4)}\n\n` +
+        `⏳ Procesando en segundo plano... Te avisaré al finalizar.`
+    );
+
+    let ultimaCapturaError = null;
+    let ultimaEtapaError = "Inicialización";
+
     try {
         await ejecutarConReintento(async (intento) => {
             const miId = (ejecucionesUsuario.get(id) || 0) + 1;
@@ -929,7 +943,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             let navegadorTelcel = null;
             let contexto = null;
             let paginaTelcel = null;
-            let cerradoManualmente = false;
+            let etapaActual = "Conexión y navegación a Telcel";
 
             try {
                 // ⚡ LANZAMIENTO LIMPIO Y DIRECTO CON GEOLOCALIZACIÓN MÉXICO
@@ -943,12 +957,10 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 paginaTelcel = sesionNav.pagina;
 
                 paginaTelcel.on('close', () => {
-                    cerradoManualmente = true;
                     console.log(`[Telcel Usuario ${id}] ⚠️ Pestaña cerrada.`);
                 });
 
                 navegadorTelcel.on('disconnected', () => {
-                    cerradoManualmente = true;
                     console.log(`[Telcel Usuario ${id}] ⚠️ Navegador desconectado/cerrado.`);
                 });
 
@@ -964,6 +976,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 });
 
                 // 🌐 NAVEGACIÓN A TELCEL
+                etapaActual = "Navegación a Telcel Pay";
                 console.log(`[Telcel Usuario ${id}] 🌐 Abriendo ${URL_TELCEL}...`);
                 await navegarSeguro(paginaTelcel, URL_TELCEL, navegadorTelcel);
 
@@ -973,12 +986,12 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 const btnPermitir = locatorSeguro(paginaTelcel, "botonPermitir").first();
                 if (await btnPermitir.isVisible({ timeout: 3000 }).catch(() => false)) {
                     await btnPermitir.click({ force: true }).catch(() => {});
-                    console.log("📍 Permiso de ubicación aceptado automáticamente");
-                    await enviarLimpio(ctx, "📍 Permiso de ubicación aceptado");
+                    console.log("[Telcel] 📍 Permiso de ubicación aceptado");
                     await esperar(400, id, miId);
                 }
 
                 // 1 & 2) 🔍 PASO 1 & 2: SELECCIÓN DEL PAQUETE $200
+                etapaActual = "Selección de paquete $200";
                 const inputNumero = 'input#id-phone-p';
 
                 console.log(`[Telcel Usuario ${id}] 🔍 Paso 1: Clic en 'Ver más paquetes'...`);
@@ -1006,7 +1019,6 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 // Ejecución precisa en DOM para ubicar la tarjeta de $200 y pulsar "Lo quiero"
                 await paginaTelcel.evaluate(() => {
                     const todos = Array.from(document.querySelectorAll('div, section, article, li'));
-                    // Tarjetas cuyo texto contenga $200 o 200 y botón "Lo quiero"
                     const tarjetas = todos.filter(el => {
                         const t = (el.innerText || '');
                         const es200 = t.includes('$200') || t.includes('Amigo Sin Límite $200') || (t.includes('200') && t.includes('Sin Límite'));
@@ -1055,6 +1067,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 }
 
                 // 3) ⏳ BLOQUE DE ESPERA TRAS DAR CLIC EN 'LO QUIERO' DEL PAQUETE $200
+                etapaActual = "Ingreso de número celular";
                 console.log(`[Telcel Usuario ${id}] ⏳ Esperando carga y campo de teléfono (${inputNumero})...`);
                 await paginaTelcel.waitForSelector('h2:has-text("Número celular"), div:has-text("Número celular")', { state: 'visible', timeout: 18000 }).catch(() => {});
                 await paginaTelcel.locator(inputNumero).waitFor({ state: 'visible', timeout: 18000 });
@@ -1096,10 +1109,11 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 } else {
                     await paginaTelcel.getByRole('button', { name: /continuar|siguiente/i }).first().click({ force: true }).catch(() => {});
                 }
-                await enviarLimpio(ctx, "📱 **NÚMERO INGRESADO**\nLlenando datos de tarjeta...");
+                console.log(`[Telcel Usuario ${id}] 📱 Número ingresado correctamente`);
 
                 // 5) 💳 PASO 5: INTRODUCIR 16 DÍGITOS DE TARJETA (input#creditCardNumber)
-                await enviarLimpio(ctx, "📝 **Llenando datos de tarjeta...**");
+                etapaActual = "Formulario de datos de tarjeta";
+                console.log(`[Telcel Usuario ${id}] 📝 Llenando datos de tarjeta...`);
 
                 let inputCC = null;
                 const selectoresCC = [
@@ -1208,9 +1222,10 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     });
                 }).catch(() => {});
 
-                await enviarLimpio(ctx, "💳 **DATOS LLENOS → PROCESANDO PAGO...**");
+                console.log(`[Telcel Usuario ${id}] 💳 Datos de tarjeta llenos`);
 
                 // 11) 🚀 PASO 11: DETECTAR BOTÓN CONTINUAR ACTIVADO Y DAR CLIC
+                etapaActual = "Procesamiento de pago";
                 await paginaTelcel.evaluate(() => {
                     const btns = Array.from(document.querySelectorAll('button'));
                     const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar') || (el.innerText || '').includes('Pagar'));
@@ -1224,7 +1239,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
                 await esperar(500, id, miId);
                 await btnContinuar.click({ force: true }).catch(() => {});
-                console.log("✅ CLIC EN BOTÓN 'CONTINUAR' EJECUTADO");
+                console.log("[Telcel] ✅ Clic en botón 'Continuar' ejecutado");
 
                 // 12) 💳 PASO 12: SI APARECE MODAL, CLIC EN 'Continuar con mi tarjeta física'
                 await esperar(1200, id, miId);
@@ -1235,9 +1250,10 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     console.log(`[Telcel Usuario ${id}] ✅ Clic en 'Continuar con mi tarjeta física' ejecutado`);
                 }
 
-                await enviarLimpio(ctx, "⌛ **Procesando pago en Telcel Pay...**\nEsperando respuesta final...");
+                console.log(`[Telcel Usuario ${id}] ⌛ Esperando respuesta final de Telcel Pay...`);
 
                 // 13) 📸 PASO 13: ESPERA ACTIVA, ENVÍO DE CAPTURA Y CIERRE LIMPIO
+                etapaActual = "Esperando comprobante de Telcel";
                 let tipoPantalla = "DESCONOCIDO";
                 let resultadoTexto = "PROCESO FINALIZADO";
                 const inicioEspera = Date.now();
@@ -1275,7 +1291,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 await esperar(1500, id, miId, paginaTelcel);
 
-                // Captura de pantalla y envío limpio
+                // Captura de pantalla y envío limpio del MENSAJE FINAL (2do y último mensaje)
                 const captura = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
                 const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
 
@@ -1292,18 +1308,22 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     } else if (tipoPantalla === "BIN_INVALIDO") {
                         mensajeCaption = 
                             `❌ **NO SE COMPLETÓ EL PROCESO** ❌\n\n` +
+                            `📅 Fecha: ${fechaHora}\n` +
+                            `📍 Etapa: Procesamiento de pago\n` +
                             `💬 Motivo: BIN o tarjeta no admitida por Telcel\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}\n` +
-                            `🔄 Instrucción: Por favor intenta nuevamente con otra tarjeta.`;
+                            `🔄 Instrucción: Por favor intenta con otra tarjeta.`;
                     } else if (tipoPantalla === "SOLICITUD_NO_COMPLETADA") {
                         mensajeCaption = 
                             `❌ **NO SE COMPLETÓ EL PROCESO** ❌\n\n` +
+                            `📅 Fecha: ${fechaHora}\n` +
+                            `📍 Etapa: Procesamiento de pago\n` +
                             `💬 Motivo: Telcel no pudo completar la solicitud de pago\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}\n` +
                             `🔄 Instrucción: Por favor intenta nuevamente más tarde.`;
                     } else {
                         mensajeCaption = 
-                            `📸 **ESTADO DE LA OPERACIÓN**\n\n` +
+                            `📸 **ESTADO FINAL DE LA OPERACIÓN**\n\n` +
                             `📅 Fecha: ${fechaHora}\n` +
                             `📱 Número: \`${numero}\`\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}`;
@@ -1339,24 +1359,52 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 return true;
 
+            } catch (errIntento) {
+                // Guardar captura interna y etapa del error para el reporte final
+                if (paginaTelcel && !paginaTelcel.isClosed()) {
+                    ultimaCapturaError = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
+                }
+                ultimaEtapaError = etapaActual;
+                throw errIntento;
             } finally {
                 await limpiarTodoYReiniciar(id, ctx, { pagina: paginaTelcel, ctx: contexto, nav: navegadorTelcel });
-                console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados al 100%.`);
+                console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados.`);
             }
         }, 3, id, ctx);
 
     } catch(errTelcel) {
         console.error(`[Telcel Usuario ${id}] ❌ Fallo total tras reintentos:`, errTelcel.message || errTelcel);
-        await enviarLimpio(
-            ctx,
-            `❌ **NO SE PUDO COMPLETAR EL PROCESO TRAS 3 INTENTOS** ❌\n\n` +
-            `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n\n` +
-            `🔄 Sesión y memoria reseteadas al 100%.`,
-            Markup.inlineKeyboard([
-                [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
-                [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-            ])
-        );
+        const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
+        const mensajeErrorFinal = 
+            `❌ **NO SE PUDO COMPLETAR LA RECARGA** ❌\n\n` +
+            `📅 Fecha: ${fechaHora}\n` +
+            `📍 Etapa: ${ultimaEtapaError || 'Procesamiento'}\n` +
+            `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n` +
+            `📱 Número: \`${numero}\`\n` +
+            `💳 Tarjeta: ****${cc.slice(-4)}`;
+
+        if (ultimaCapturaError) {
+            await enviarFotoLimpia(
+                ctx,
+                { source: ultimaCapturaError },
+                {
+                    caption: mensajeErrorFinal.slice(0, 1024),
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                    ])
+                }
+            );
+        } else {
+            await enviarLimpio(
+                ctx,
+                mensajeErrorFinal,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                    [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                ])
+            );
+        }
     } finally {
         await limpiarTodoYReiniciar(id, ctx);
     }
@@ -2454,5 +2502,3 @@ if (ES_MODO_PRUEBA_BD) {
 }
 
 module.exports = { testConexionNavegador };
-
-
