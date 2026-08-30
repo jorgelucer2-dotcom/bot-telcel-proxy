@@ -1035,17 +1035,32 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await esperar(400, id, miId);
                 }
 
-                // 1 & 2) 🔍 PASO 1 & 2: SELECCIÓN DEL PAQUETE ($200, $300 o $500)
+                // 1 & 2) 🔍 PASO PREVIO OBLIGATORIO: VER MÁS PAQUETES
                 etapaActual = `Selección de paquete $${monto}`;
                 const inputNumero = 'input#id-phone-p';
 
-                console.log(`[Telcel Usuario ${id}] 🔍 Paso 1: Clic en 'Ver más paquetes'...`);
-                const botonVerMas = locatorSeguro(paginaTelcel, "botonVerMas").first();
-                if (await botonVerMas.isVisible({ timeout: 5000 }).catch(() => false)) {
-                    await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
-                    await botonVerMas.click({ force: true }).catch(() => {});
-                    console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes' ejecutado`);
-                } else {
+                console.log(`[Telcel Usuario ${id}] 🔍 Paso 1: Localizando botón 'Ver más paquetes'...`);
+                console.log('[PAQUETES] Abriendo paquetes adicionales...');
+
+                // 1 & 2. Localizar y verificar visibilidad del botón "Ver más paquetes"
+                const botonVerMas = paginaTelcel.locator('button, div[role="button"], a, p').filter({ hasText: /ver m[áa]s paquetes/i }).first();
+                let botonVerMasVisible = await botonVerMas.isVisible({ timeout: 5000 }).catch(() => false);
+
+                if (!botonVerMasVisible) {
+                    botonVerMasVisible = await paginaTelcel.evaluate(() => {
+                        const btns = Array.from(document.querySelectorAll('button, div[role="button"], a, p'));
+                        return btns.some(b => (b.innerText || '').toLowerCase().includes('ver más paquetes'));
+                    }).catch(() => false);
+                }
+
+                if (!botonVerMasVisible) {
+                    console.error('[PAQUETES] ERROR: BOTÓN VER MÁS PAQUETES NO ENCONTRADO');
+                    throw new Error('BOTON_VER_MAS_PAQUETES_NO_ENCONTRADO');
+                }
+
+                // 3. Hacer click sobre "Ver más paquetes" usando API de Playwright
+                await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
+                await botonVerMas.click().catch(async () => {
                     await paginaTelcel.evaluate(() => {
                         const btns = Array.from(document.querySelectorAll('button, div[role="button"], a, p'));
                         const btn = btns.find(b => (b.innerText || '').toLowerCase().includes('ver más paquetes'));
@@ -1055,68 +1070,75 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             if (typeof target.click === 'function') target.click();
                         }
                     }).catch(() => {});
+                });
+
+                // 4 & 5. Esperar a que los paquetes adicionales estén realmente cargados y volver a inspeccionar
+                await paginaTelcel.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+                await esperar(2500, id, miId, paginaTelcel);
+                console.log('[PAQUETES] Paquetes adicionales cargados.');
+
+                // 6. Identificar las tarjetas INDIVIDUALES de los paquetes
+                const tarjetasInfo = await paginaTelcel.evaluate(() => {
+                    // Encontrar todos los botones de acción "Lo quiero" en la página
+                    const btns = Array.from(document.querySelectorAll('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, .Plan_buttonPackageContainer__dOIw6, b, button'))
+                        .filter(el => (el.innerText || '').trim().toLowerCase() === 'lo quiero');
+
+                    const lista = [];
+                    const tarjetasIdentificadas = new Set();
+
+                    for (const btn of btns) {
+                        // Subir al contenedor específico de la tarjeta que agrupa monto, info y botón
+                        let contenedor = btn.closest('[class*="Plan_buttonPackageContainer"]')?.parentElement || btn.parentElement;
+                        while (contenedor && contenedor !== document.body) {
+                            const texto = (contenedor.innerText || '').replace(/\s+/g, ' ').trim();
+                            // El contenedor de la tarjeta individual debe contener el precio y su botón
+                            if (texto.includes('$') || /\b(50|100|150|200|300|500)\b/.test(texto)) {
+                                break;
+                            }
+                            contenedor = contenedor.parentElement;
+                        }
+
+                        if (contenedor && !tarjetasIdentificadas.has(contenedor)) {
+                            tarjetasIdentificadas.add(contenedor);
+                            const idIndex = lista.length;
+                            contenedor.setAttribute('data-telcel-card-id', String(idIndex));
+                            const textoLimpio = (contenedor.innerText || '').replace(/\s+/g, ' ').trim();
+                            lista.push({ idIndex, texto: textoLimpio });
+                        }
+                    }
+                    return lista;
+                });
+
+                console.log(`[PAQUETES] Buscando monto solicitado: $${monto}`);
+
+                // 7. Buscar dentro de la tarjeta correspondiente EXACTAMENTE el monto solicitado ($200, $300 o $500)
+                // Criterio estricto: $200 no debe coincidir con $2000, $1200, $20000; $300 no con $3000; $500 no con $5000.
+                const regexExacto = new RegExp(`(?:^|[^0-9])\\$?\\s*${monto}(?:[^0-9]|$)`, 'i');
+                const tarjetaEncontrada = tarjetasInfo.find(t => regexExacto.test(t.texto));
+
+                if (!tarjetaEncontrada) {
+                    console.log(`[PAQUETE $${monto}] Encontrado: NO`);
+                    console.error(`[PAQUETE $${monto}] ERROR: NO ENCONTRADO`);
+                    throw new Error(`PAQUETE_$${monto}_NO_ENCONTRADO`);
                 }
 
-                await esperar(1500, id, miId);
+                console.log(`[PAQUETE $${monto}] Encontrado: SI`);
 
-                // 📦 PARTE 4 & 5: BUSCAR ESPECÍFICAMENTE EL PAQUETE SELECCIONADO Y SU BOTÓN "LO QUIERO"
-                console.log(`[FLUJO] Monto seleccionado: $${monto}`);
-                console.log(`[FLUJO] Buscando paquete $${monto}`);
+                // 8. Localizar el botón "Lo quiero" QUE PERTENEZCA A ESA MISMA TARJETA
+                const tarjetaLoc = paginaTelcel.locator(`[data-telcel-card-id="${tarjetaEncontrada.idIndex}"]`);
+                const btnLoQuiero = tarjetaLoc.locator('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, b:has-text("Lo quiero"), button:has-text("Lo quiero"), [role="button"]:has-text("Lo quiero")').first();
 
-                const paqueteSeleccionado = await paginaTelcel.evaluate((montoTarget) => {
-                    const textoMontoExacto = `$${montoTarget}`;
-                    const todos = Array.from(document.querySelectorAll('div, section, article, li'));
+                await btnLoQuiero.waitFor({ state: 'visible', timeout: 8000 });
+                await btnLoQuiero.scrollIntoViewIfNeeded();
 
-                    // Filtrar elementos que contengan la referencia explícita al monto deseado y un botón "Lo quiero"
-                    const tarjetas = todos.filter(el => {
-                        const t = (el.innerText || '');
-                        const tieneMonto = t.includes(textoMontoExacto) || t.includes(`$ ${montoTarget}`) || t.includes(`Sin Límite $${montoTarget}`) || t.includes(`Sin Límite ${montoTarget}`);
-                        const tieneLoQuiero = t.includes('Lo quiero') || el.querySelector('.Plan_buttonPackage__SY6E2, b.Plan_buttonPackageLabel__xB_jv, [role="button"]');
-                        return tieneMonto && tieneLoQuiero;
-                    });
+                console.log(`[PAQUETE $${monto}] Botón "Lo quiero": ENCONTRADO`);
 
-                    if (tarjetas.length === 0) return false;
+                // 9. Clic usando la API normal de Playwright sobre el botón encontrado
+                await btnLoQuiero.click();
 
-                    // Ordenar por longitud de texto ascendente para obtener la tarjeta contenedora más específica
-                    tarjetas.sort((a, b) => (a.innerText.length - b.innerText.length));
-                    const tarjeta = tarjetas[0];
+                console.log(`[PAQUETE $${monto}] Seleccionado correctamente`);
 
-                    // Localizar el botón "Lo quiero" DENTRO de esa tarjeta específica
-                    const btn = tarjeta.querySelector('.Plan_buttonPackageContainer__dOIw6, .Plan_buttonPackage__SY6E2, b.Plan_buttonPackageLabel__xB_jv, b, button, [role="button"]');
-                    if (btn) {
-                        btn.scrollIntoView({ block: 'center' });
-                        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
-                            btn.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
-                        });
-                        if (typeof btn.click === 'function') btn.click();
-                        const p = btn.closest('.Plan_buttonPackageContainer__dOIw6, .Plan_buttonPackage__SY6E2, div, button');
-                        if (p && typeof p.click === 'function') p.click();
-                        return true;
-                    }
-                    return false;
-                }, monto);
-
-                if (!paqueteSeleccionado) {
-                    // Intento de respaldo con locator de Playwright acotado al texto exacto
-                    const cardLoc = paginaTelcel.locator(`div:has-text("$${monto}"), section:has-text("$${monto}")`).filter({ hasText: 'Lo quiero' }).last();
-                    const btnLoQuiero = cardLoc.locator('.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, b:has-text("Lo quiero"), button:has-text("Lo quiero")').first();
-                    if (await btnLoQuiero.isVisible({ timeout: 4000 }).catch(() => false)) {
-                        await btnLoQuiero.scrollIntoViewIfNeeded().catch(() => {});
-                        await btnLoQuiero.click({ force: true }).catch(() => {});
-                        console.log(`[FLUJO] Paquete $${monto} encontrado`);
-                        console.log(`[FLUJO] Botón "Lo quiero" localizado`);
-                        console.log(`[FLUJO] Paquete seleccionado correctamente`);
-                    } else {
-                        console.error(`[FLUJO] ERROR: PAQUETE $${monto} NO ENCONTRADO`);
-                        throw new Error(`PAQUETE_$${monto}_NO_ENCONTRADO`);
-                    }
-                } else {
-                    console.log(`[FLUJO] Paquete $${monto} encontrado`);
-                    console.log(`[FLUJO] Botón "Lo quiero" localizado`);
-                    console.log(`[FLUJO] Paquete seleccionado correctamente`);
-                }
-
-                // 3) ⏳ BLOQUE DE ESPERA TRAS DAR CLIC EN 'LO QUIERO' DEL PAQUETE $200
+                // 3) ⏳ BLOQUE DE ESPERA TRAS DAR CLIC EN 'LO QUIERO'
                 etapaActual = "Ingreso de número celular";
                 console.log(`[Telcel Usuario ${id}] ⏳ Esperando carga y campo de teléfono (${inputNumero})...`);
                 await paginaTelcel.waitForSelector('h2:has-text("Número celular"), div:has-text("Número celular")', { state: 'visible', timeout: 18000 }).catch(() => {});
@@ -1272,31 +1294,63 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     });
                 }).catch(() => {});
 
-                console.log(`[Telcel Usuario ${id}] 💳 Datos de tarjeta llenos`);
-
-                // 11) 🚀 PASO 11: DETECTAR BOTÓN CONTINUAR ACTIVADO Y DAR CLIC
+                // 11) 🚀 PASO 11: ESPERAR A QUE LA PÁGINA HABILITE EL BOTÓN CONTINUAR DE FORMA NATURAL
                 etapaActual = "Procesamiento de pago";
-                await paginaTelcel.evaluate(() => {
-                    const btns = Array.from(document.querySelectorAll('button'));
-                    const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar') || (el.innerText || '').includes('Pagar'));
-                    if (b) { 
-                        b.removeAttribute('disabled'); 
-                        b.style.pointerEvents = 'auto'; 
-                    }
-                }).catch(() => {});
 
                 const btnContinuar = locatorSeguro(paginaTelcel, "botonPagar").last();
+                await btnContinuar.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+
+                // Inspeccionar estado real del botón Continuar
+                const encontradoContinuar = await btnContinuar.count().then(c => c > 0).catch(() => false);
+                const visibleContinuar = encontradoContinuar ? await btnContinuar.isVisible().catch(() => false) : false;
+
+                // Esperar a que la propia página habilite el botón de forma natural (SIN removeAttribute('disabled') NI forzar)
+                let enabledContinuar = false;
+                let disabledContinuar = true;
+
+                const inicioEsperaContinuar = Date.now();
+                while (Date.now() - inicioEsperaContinuar < 15000) {
+                    enabledContinuar = await btnContinuar.isEnabled().catch(() => false);
+                    disabledContinuar = await btnContinuar.isDisabled().catch(() => true);
+                    if (enabledContinuar && !disabledContinuar) {
+                        break;
+                    }
+                    await esperar(300, id, miId, paginaTelcel);
+                }
+
+                console.log(`[CONTINUAR] Encontrado: ${encontradoContinuar ? 'SI' : 'NO'}`);
+                console.log(`[CONTINUAR] Visible: ${visibleContinuar ? 'SI' : 'NO'}`);
+                console.log(`[CONTINUAR] Enabled: ${enabledContinuar ? 'SI' : 'NO'}`);
+                console.log(`[CONTINUAR] Disabled: ${disabledContinuar ? 'SI' : 'NO'}`);
+
+                if (!enabledContinuar) {
+                    throw new Error("BOTON_CONTINUAR_NO_HABILITADO");
+                }
+
+                // Clic natural cuando la página lo habilitó (sin force)
                 await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
-                await esperar(500, id, miId);
-                await btnContinuar.click({ force: true }).catch(() => {});
+                await btnContinuar.click();
                 console.log("[Telcel] ✅ Clic en botón 'Continuar' ejecutado");
 
-                // 12) 💳 PASO 12: SI APARECE MODAL, CLIC EN 'Continuar con mi tarjeta física'
-                await esperar(1200, id, miId);
+                // Esperar transición real de la página después del clic
+                await paginaTelcel.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+                await esperar(1200, id, miId, paginaTelcel);
+
+                // 12) 💳 PASO 12: DETECCIÓN DEL SEGUNDO MODAL ("Continuar con mi tarjeta física")
                 const btnFisica = locatorSeguro(paginaTelcel, "botonTarjetaFisica").first();
-                if (await btnFisica.isVisible({ timeout: 3500 }).catch(() => false)) {
+                await btnFisica.waitFor({ state: 'attached', timeout: 5000 }).catch(() => {});
+
+                const encontradoModal = await btnFisica.count().then(c => c > 0).catch(() => false);
+                const visibleModal = encontradoModal ? await btnFisica.isVisible({ timeout: 2000 }).catch(() => false) : false;
+                const enabledModal = visibleModal ? await btnFisica.isEnabled().catch(() => false) : false;
+
+                console.log(`[MODAL] "Continuar con mi tarjeta física" encontrado: ${encontradoModal ? 'SI' : 'NO'}`);
+                console.log(`[MODAL] Visible: ${visibleModal ? 'SI' : 'NO'}`);
+                console.log(`[MODAL] Enabled: ${enabledModal ? 'SI' : 'NO'}`);
+
+                if (visibleModal && enabledModal) {
                     await btnFisica.scrollIntoViewIfNeeded().catch(() => {});
-                    await btnFisica.click({ force: true }).catch(() => {});
+                    await btnFisica.click().catch(() => {});
                     console.log(`[Telcel Usuario ${id}] ✅ Clic en 'Continuar con mi tarjeta física' ejecutado`);
                 }
 
@@ -2656,3 +2710,4 @@ if (ES_MODO_PRUEBA_IP) {
 }
 
 module.exports = { testConexionNavegador, testDiagnosticoRed };
+
