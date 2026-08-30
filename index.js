@@ -1,11 +1,12 @@
 'use strict';
 
-process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
-require('dotenv').config();
-const http = require('http');
-const { exec } = require('child_process');
+process.env.PLAYWRIGHT_BROWSERS_PATH = '/tmp/playwright-browsers';
+process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '0';
 const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
+const http = require('http');
+const { exec } = require('child_process');
+require('dotenv').config();
 
 // 🛡️ PROXY BRIGHT DATA MÉXICO 🇲🇽
 const PROXY = {
@@ -1761,4 +1762,3 @@ function iniciarBotTelegram() {
 }
 
 iniciarBotTelegram();
-
