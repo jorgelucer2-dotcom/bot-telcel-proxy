@@ -938,19 +938,17 @@ async function limpiarTodoYReiniciar(id, ctx, sesion = null) {
     global.gc?.();
 }
  
-// 🔄 ENVOLTORIO DE EJECUCIÓN CON REINTENTO AUTOMÁTICO (HASTA 3 INTENTOS)
-async function ejecutarConReintento(fn, intentosMax = 3, id, ctx) {
+// 🔄 ENVOLTORIO DE EJECUCIÓN (1 SOLO INTENTO, SIN REINTENTOS MÚLTIPLES)
+async function ejecutarConReintento(fn, intentosMax = 1, id, ctx) {
     let ultimoError = null;
     for (let intento = 1; intento <= intentosMax; intento++) {
         try {
-            console.log(`[AutoProtección Usuario ${id}] 🔄 Ejecución intento ${intento}/${intentosMax}`);
+            console.log(`[AutoProtección Usuario ${id}] 🔄 Ejecución (Intento único)`);
             return await fn(intento);
         } catch (error) {
             ultimoError = error;
-            console.error(`[AutoProtección Usuario ${id}] ⚠️ Fallo en intento ${intento}/${intentosMax}:`, error.message || error);
+            console.error(`[AutoProtección Usuario ${id}] ⚠️ Fallo en intento único:`, error.message || error);
             if (intento < intentosMax) {
-                // ⚠️ Solo log en consola para no saturar Telegram
-                console.log(`[AutoProtección Usuario ${id}] 🔄 Reintentando (${intento + 1}/${intentosMax}) en segundo plano...`);
                 await limpiarTodoYReiniciar(id, ctx);
                 await esperar(2000, id);
             }
@@ -1421,7 +1419,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             ultimoMensaje.delete(id);
                         }
                     } else {
-                        // ❌ PARTE 13: SI ES ERROR, ELIMINAR PROCESANDO Y NO DEJAR CAPTURAS DE ERROR EN TELEGRAM
+                        // ❌ SI ES ERROR, TOMAR CAPTURA DE PANTALLA Y ENVIARLA A TELEGRAM
                         let mensajeError = '';
                         if (tipoPantalla === "BIN_INVALIDO") {
                             mensajeError = 
@@ -1453,15 +1451,31 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                                 `💰 Monto: $${monto} MXN\n` +
                                 `💳 Tarjeta: ****${cc.slice(-4)}`;
                         }
- 
-                        await enviarLimpio(
-                            ctx,
-                            mensajeError,
-                            Markup.inlineKeyboard([
-                                [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
-                                [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-                            ])
-                        );
+
+                        const capturaError = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
+
+                        if (capturaError) {
+                            await enviarFotoLimpia(
+                                ctx,
+                                { source: capturaError },
+                                {
+                                    caption: mensajeError.slice(0, 1024),
+                                    ...Markup.inlineKeyboard([
+                                        [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                                    ])
+                                }
+                            );
+                        } else {
+                            await enviarLimpio(
+                                ctx,
+                                mensajeError,
+                                Markup.inlineKeyboard([
+                                    [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                                    [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                                ])
+                            );
+                        }
                     }
                 }
  
@@ -1473,15 +1487,18 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
  
             } catch (errIntento) {
                 ultimaEtapaError = etapaActual;
+                if (paginaTelcel && !paginaTelcel.isClosed()) {
+                    ultimaCapturaError = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
+                }
                 throw errIntento;
             } finally {
                 await limpiarTodoYReiniciar(id, ctx, { pagina: paginaTelcel, ctx: contexto, nav: navegadorTelcel });
                 console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados.`);
             }
-        }, 3, id, ctx);
+        }, 1, id, ctx);
  
     } catch(errTelcel) {
-        console.error(`[Telcel Usuario ${id}] ❌ Fallo total tras reintentos:`, errTelcel.message || errTelcel);
+        console.error(`[Telcel Usuario ${id}] ❌ Fallo en recarga:`, errTelcel.message || errTelcel);
         const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
         const mensajeErrorFinal = 
             `❌ **NO SE PUDO COMPLETAR LA RECARGA** ❌\n\n` +
@@ -1492,14 +1509,28 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             `💰 Monto: $${monto} MXN\n` +
             `💳 Tarjeta: ****${cc.slice(-4)}`;
  
-        await enviarLimpio(
-            ctx,
-            mensajeErrorFinal,
-            Markup.inlineKeyboard([
-                [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
-                [Markup.button.callback('❌ Salir', 'cancelar_accion')]
-            ])
-        );
+        if (ultimaCapturaError) {
+            await enviarFotoLimpia(
+                ctx,
+                { source: ultimaCapturaError },
+                {
+                    caption: mensajeErrorFinal.slice(0, 1024),
+                    ...Markup.inlineKeyboard([
+                        [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                        [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                    ])
+                }
+            );
+        } else {
+            await enviarLimpio(
+                ctx,
+                mensajeErrorFinal,
+                Markup.inlineKeyboard([
+                    [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
+                    [Markup.button.callback('❌ Salir', 'cancelar_accion')]
+                ])
+            );
+        }
     } finally {
         await limpiarTodoYReiniciar(id, ctx);
     }
@@ -1636,10 +1667,10 @@ async function iniciarProcesoUsuario(ctx, datosTarjeta, usuarioId) {
     );
  
     let exito = false;
-    for(let intento = 1; intento <= 2; intento++){
+    for(let intento = 1; intento <= 1; intento++){
         if (miId !== ejecucionesUsuario.get(usuarioId)) return;
  
-        console.log(`\n[Usuario ${usuarioId}] 🔄 Intento ${intento}/2`);
+        console.log(`\n[Usuario ${usuarioId}] 🔄 Intento único`);
         try {
             const resultado = await flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId);
             if (miId !== ejecucionesUsuario.get(usuarioId)) return;
@@ -1651,17 +1682,14 @@ async function iniciarProcesoUsuario(ctx, datosTarjeta, usuarioId) {
             break;
         } catch(e){
             if (miId !== ejecucionesUsuario.get(usuarioId) || e.message === "PROCESO_REINICIADO") return;
-            console.error(`[Usuario ${usuarioId}] Error en intento ${intento}:`, e.message || e);
-            if (intento < 2) {
-                await esperar(3000, usuarioId, miId).catch(() => {});
-            }
+            console.error(`[Usuario ${usuarioId}] Error en intento único:`, e.message || e);
         }
     }
  
     // Único mensaje si falla al final
     if (miId === ejecucionesUsuario.get(usuarioId) && !exito) {
         await ctx.reply(
-            "❌ NO SE PUDO ACREDITAR LA CUENTA TRAS LOS INTENTOS\n\n" +
+            "❌ NO SE PUDO ACREDITAR LA CUENTA\n\n" +
             "💡 Posible causa: Tarjeta declinada o bloqueo temporal de IP.\n" +
             "📌 Puedes cambiar de IP y volver a intentar con /crear o /reiniciar"
         );
