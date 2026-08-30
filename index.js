@@ -35,17 +35,7 @@ servidorHttp.listen(PUERTO, '0.0.0.0', () => {
     console.log(`📡 Servidor HTTP activo y escuchando en 0.0.0.0:${PUERTO} (Render compatible)`);
 });
 
-// 🔄 AUTO-INSTALADOR DE CHROMIUM SI FALTA EN RENDER / LINUX
-if (process.platform === 'linux' || process.env.RENDER) {
-    try {
-        console.log("🔍 Verificando/Instalando binarios de Chromium para Render...");
-        const { execSync } = require('child_process');
-        execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 120000 });
-        console.log("✅ Binarios de Chromium verificados correctamente");
-    } catch (err) {
-        console.log("ℹ️ Verificación de Chromium:", err.message || err);
-    }
-}
+
 
 // --------------------------------------------------
 // 🛡️ PROTECCIÓN GLOBAL CONTRA CAÍDAS DE NODE.JS
@@ -959,17 +949,36 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
 
         // ✅ 6. CAPTURA DE PANTALLA Y ENVÍO AL BOT SEGÚN EL TIPO
         const captura = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
+        const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
 
         if (miId === ejecucionesUsuario.get(id)) {
-            let mensajeCaption = `📸 ${resultadoTexto}\n\n`;
+            let mensajeCaption = '';
             if (tipoPantalla === "PAGO_EXITOSO") {
-                mensajeCaption += `✅ ¡Recarga de $${MONTO_TELCEL} MXN completada con éxito!\n📱 Número: ${numero}\n👤 Titular: ${nombre}\n💳 Tarjeta: ****${cc.slice(-4)}`;
+                mensajeCaption = 
+                    `✅ RECARGA FINALIZADA CON ÉXITO ✅\n\n` +
+                    `📅 Fecha: ${fechaHora}\n` +
+                    `💰 Monto: $${MONTO_TELCEL} MXN\n` +
+                    `📱 Número: ${numero}\n` +
+                    `👤 Titular: ${nombre}\n` +
+                    `💳 Tarjeta: ****${cc.slice(-4)}`;
             } else if (tipoPantalla === "BIN_INVALIDO") {
-                mensajeCaption += `🚫 El BIN o tipo de tarjeta no fue aceptado por Telcel.\n💳 Tarjeta: ****${cc.slice(-4)}\n💡 Intenta con otro BIN / tarjeta.`;
+                mensajeCaption = 
+                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                    `💬 Motivo: BIN o tarjeta no admitida por Telcel\n` +
+                    `💳 Tarjeta: ****${cc.slice(-4)}\n` +
+                    `🔄 Instrucción: Por favor intenta nuevamente más tarde con otra tarjeta.`;
             } else if (tipoPantalla === "SOLICITUD_NO_COMPLETADA") {
-                mensajeCaption += `⚠️ Telcel no pudo completar la solicitud de pago.\n💳 Tarjeta: ****${cc.slice(-4)}\n💡 Intenta con otra tarjeta.`;
+                mensajeCaption = 
+                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                    `💬 Motivo: Telcel no pudo completar la solicitud de pago\n` +
+                    `💳 Tarjeta: ****${cc.slice(-4)}\n` +
+                    `🔄 Instrucción: Por favor intenta nuevamente más tarde.`;
             } else {
-                mensajeCaption += `📱 Número: ${numero}\n💳 Tarjeta: ****${cc.slice(-4)}`;
+                mensajeCaption = 
+                    `📸 ESTADO DE LA OPERACIÓN\n\n` +
+                    `📅 Fecha: ${fechaHora}\n` +
+                    `📱 Número: ${numero}\n` +
+                    `💳 Tarjeta: ****${cc.slice(-4)}`;
             }
 
             if (captura) {
@@ -999,7 +1008,9 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
             console.error("❌ ERROR:", errTelcel);
             if (miId === ejecucionesUsuario.get(id)) {
                 await ctx.reply(
-                    `❌ ERROR: ${(errTelcel.message || 'Error').slice(0, 80)}\n🔄 Proceso restaurado.`
+                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                    `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 80)}\n` +
+                    `🔄 Instrucción: Por favor intenta nuevamente más tarde.`
                 );
                 // Captura también si hay error y la página sigue abierta
                 if (paginaTelcel && !paginaTelcel.isClosed()) {
@@ -1732,4 +1743,22 @@ process.once('SIGINT', () => {
 process.once('SIGTERM', () => {
     console.log('🛑 Recibido SIGTERM, cerrando bot...');
     bot.stop('SIGTERM');
+    process.exit(0);
+});
+
+function iniciarBotTelegram() {
+    bot.launch({
+        dropPendingUpdates: true,
+        polling: {
+            timeout: 3000
+        }
+    })
+    .then(() => console.log(`✅ Bot corriendo en puerto ${PUERTO} | Proxy: MÉXICO 🇲🇽 (Capacidad: 8 concurrentes)`))
+    .catch(err => {
+        console.error("⚠️ Fallo en conexión de Telegram. Reintentando en 2 segundos...", err.message || err);
+        setTimeout(iniciarBotTelegram, 2000);
+    });
+}
+
+iniciarBotTelegram();
 
