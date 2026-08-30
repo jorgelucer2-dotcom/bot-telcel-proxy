@@ -695,7 +695,8 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         }
 
         // 1. VERIFICAR SI YA ESTÁ EL CAMPO DE TELÉFONO EN PANTALLA
-        const telDirecto = paginaTelcel.locator('input#id-phone, input[type="tel"], input[placeholder*="número" i], input[placeholder*="Ingresa" i], input[name*="phone"]').first();
+        const selectorTel = 'input#id-phone, input[type="tel"], input[placeholder*="número" i], input[placeholder*="Ingresa" i], input[name="phone"], input[name*="phone"]';
+        const telDirecto = paginaTelcel.locator(selectorTel).first();
         const telYaVisible = await telDirecto.isVisible({ timeout: 2000 }).catch(() => false);
 
         if (!telYaVisible) {
@@ -747,9 +748,13 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         await ctx.reply("✅ PAQUETE $200 SELECCIONADO");
 
         // 2. 📱 CAPTURA DEL NÚMERO RESILIENTE
-        const inputTel = paginaTelcel.locator('input#id-phone, input[type="tel"], input[placeholder*="número" i], input[placeholder*="Ingresa" i], input[name*="phone"], input').first();
+        const inputTel = paginaTelcel.locator(selectorTel).first();
         await inputTel.waitFor({ state: 'visible', timeout: 20000 });
+        await inputTel.click({ force: true });
         await inputTel.fill(numero, { force: true });
+        await inputTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
+        await inputTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
+        await inputTel.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
         // Clic en Continuar del teléfono
         const btnContinuarTel = paginaTelcel.locator('button:has-text("Continuar"), button:has-text("Siguiente"), button[type="submit"]').first();
@@ -1756,5 +1761,3 @@ function iniciarBotTelegram() {
 }
 
 iniciarBotTelegram();
-
-
