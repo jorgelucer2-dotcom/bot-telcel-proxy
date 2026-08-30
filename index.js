@@ -18,7 +18,7 @@ const MONTO_TELCEL = 200;
 const TIEMPO_MAX_COMANDO = 240000; // 4 minutos límite por proceso para evitar cuelgues
 const MAX_USUARIOS = 8;
 
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
 
 // --------------------------------------------------
 // 🛡️ PROTECCIÓN GLOBAL CONTRA CAÍDAS DE NODE.JS
@@ -651,6 +651,13 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         return;
     }
 
+    flujoTelcelIndependiente(ctx, id, { numero, cc, mes, anio, cvv, nombre }).catch(err => {
+        console.error(`[Telcel Usuario ${id}] Error en ejecución:`, err.message || err);
+    });
+});
+
+async function flujoTelcelIndependiente(ctx, id, datos) {
+    const { numero, cc, mes, anio, cvv, nombre } = datos;
     const miId = (ejecucionesUsuario.get(id) || 0) + 1;
     ejecucionesUsuario.set(id, miId);
 
@@ -1025,19 +1032,33 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
                 await ctx.reply("🔄 Ventana cerrada. Se ha restaurado todo el proceso correctamente.\n👉 Escribe /recarga para iniciar de nuevo.");
             }
         } else {
-            console.error("❌ ERROR:", errTelcel);
+            console.error("❌ ERROR Telcel:", errTelcel);
             if (miId === ejecucionesUsuario.get(id)) {
-                await ctx.reply(
-                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
-                    `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 80)}\n` +
-                    `🔄 Instrucción: Por favor intenta nuevamente más tarde.`
-                );
-                // Captura también si hay error y la página sigue abierta
+                let capturaEnviada = false;
                 if (paginaTelcel && !paginaTelcel.isClosed()) {
                     const capError = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
                     if (capError) {
-                        await ctx.replyWithPhoto({ source: capError }, { caption: "⚠️ EN PUNTO DE ERROR" }).catch(() => {});
+                        capturaEnviada = true;
+                        await ctx.replyWithPhoto(
+                            { source: capError },
+                            {
+                                caption:
+                                    `❌ ERROR EN EL PROCESO TELCEL ❌\n\n` +
+                                    `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n` +
+                                    `📍 URL: ${paginaTelcel.url().slice(0, 100)}\n\n` +
+                                    `🔄 Sesión reseteada automáticamente.\n` +
+                                    `👉 Escribe /recarga para intentar de nuevo.`
+                            }
+                        ).catch(() => {});
                     }
+                }
+                if (!capturaEnviada) {
+                    await ctx.reply(
+                        `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                        `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n\n` +
+                        `🔄 Sesión reseteada automáticamente.\n` +
+                        `👉 Escribe /recarga para intentar de nuevo.`
+                    ).catch(() => {});
                 }
             }
         }
@@ -1063,7 +1084,7 @@ bot.action(['ok', 'pago', 'pagoTelcel', 'iniciarPago', 'pagarTelcel', 'pagar_tel
         await liberarUsuario(id, ctx);
         console.log(`[Telcel Usuario ${id}] 🧹 Estado y navegador liberados al 100%.`);
     }
-});
+}
 
 // ❌ CANCELAR
 bot.action(['no', 'cancela', 'cancelar', 'cancelaTelcel', 'cancelarTelcel', 'cancelaNetflix', 'cancelarNetflix'], async ctx => {
@@ -1612,72 +1633,102 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         console.log("🔎 PASO 6: Seleccionando opción Tarjeta de crédito o débito...");
 
         let seleccionoTarjeta = false;
-        for (let reintento = 1; reintento <= 5; reintento++) {
+        for (let reintento = 1; reintento <= 8; reintento++) {
             if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
 
-            const btnIntermedio = pagina.locator('button:has-text("Siguiente"), button:has-text("Continuar")').first();
-            if (await btnIntermedio.isVisible({timeout:1500}).catch(() => false)) {
+            // Si hay botón Siguiente / Continuar intermedio
+            const btnIntermedio = pagina.locator('button:has-text("Siguiente"), button:has-text("Continuar"), a:has-text("Siguiente"), a:has-text("Continuar")').first();
+            if (await btnIntermedio.isVisible({timeout:1200}).catch(() => false)) {
+                await btnIntermedio.scrollIntoViewIfNeeded().catch(() => {});
                 await btnIntermedio.click({force:true}).catch(() => {});
-                await esperar(2000, usuarioId, miId);
+                await esperar(1500, usuarioId, miId);
             }
 
-            const locatorTarjeta = pagina.locator([
-                'div[data-layout="item"]:has-text("Tarjeta de crédito o débito")',
-                'div.eq269h80:has-text("Tarjeta de crédito o débito")',
-                'div.default-ltr-iqcdef-cache-15uvowc',
-                'div[class*="default-ltr-iqcdef-cache"]:has-text("Tarjeta de crédito o débito")',
+            // Omitir pantallas secundarias si reaparecen
+            await gestionarOmitirVerificacionEmail();
+            await gestionarTelefonoSiAparece();
+
+            // Selectores oficiales y flexibles para la opción de Tarjeta
+            const selectoresOpcionTarjeta = [
+                'a[data-uia="payment-choice-creditOption"]',
+                'a[data-uia*="creditOption"]',
+                'a[href*="creditOption"]',
+                'button[data-uia*="creditOption"]',
+                '[data-uia="creditOption-link"]',
+                '[data-uia*="credit"]',
+                'a:has-text("Tarjeta de crédito o débito")',
+                'button:has-text("Tarjeta de crédito o débito")',
+                'div[data-layout="item"]:has-text("Tarjeta")',
+                'div:has-text("Tarjeta de crédito o débito")',
                 'text="Tarjeta de crédito o débito"'
-            ].join(', ')).first();
+            ];
 
-            if (await locatorTarjeta.isVisible({timeout:2500}).catch(() => false)) {
-                await locatorTarjeta.scrollIntoViewIfNeeded().catch(() => {});
-                await locatorTarjeta.click({force:true}).catch(() => {});
+            for (const sel of selectoresOpcionTarjeta) {
+                const loc = pagina.locator(sel).first();
+                if (await loc.isVisible({timeout:600}).catch(() => false)) {
+                    await loc.scrollIntoViewIfNeeded().catch(() => {});
+                    await loc.click({force:true}).catch(() => {});
+                    seleccionoTarjeta = true;
+                    break;
+                }
             }
 
-            seleccionoTarjeta = await pagina.evaluate(() => {
-                const elementos = Array.from(document.querySelectorAll('*'));
-                const encontrados = elementos.filter(el => 
-                    el.textContent && 
-                    el.textContent.includes('Tarjeta de crédito o débito') &&
-                    el.children.length <= 4
-                );
-
-                if (encontrados.length > 0) {
-                    const objetivo = encontrados[encontrados.length - 1];
-                    const contenedor = objetivo.closest('div[data-layout="item"], div.eq269h80, a, button, [role="button"], div') || objetivo;
+            // Respaldo DOM agresivo buscando enlace/botón de Tarjeta
+            await pagina.evaluate(() => {
+                const elementos = Array.from(document.querySelectorAll('a, button, [role="button"], div[data-layout="item"], div'));
+                const tarjetaLink = elementos.find(el => {
+                    const t = (el.textContent || '').trim();
+                    const uia = el.getAttribute('data-uia') || '';
+                    const href = el.getAttribute('href') || '';
+                    return uia.includes('creditOption') || href.includes('creditOption') || t.includes('Tarjeta de crédito o débito') || (t.includes('Tarjeta') && t.includes('débito'));
+                });
+                if (tarjetaLink) {
+                    const contenedor = tarjetaLink.closest('a, button, [role="button"]') || tarjetaLink;
                     contenedor.scrollIntoView({ block: 'center' });
-
                     ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
                         contenedor.dispatchEvent(new MouseEvent(evt, { bubbles: true, cancelable: true, view: window }));
                     });
                     if (typeof contenedor.click === 'function') contenedor.click();
-                    return true;
                 }
-                return false;
-            }).catch(() => false);
+            }).catch(() => {});
 
-            await esperar(3000, usuarioId, miId);
+            await esperar(2000, usuarioId, miId);
 
-            const inputNumTest = pagina.locator('input[name*="creditCardNumber"], input[name*="cardNumber"], input[id*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[placeholder*="Número"]').first();
-            if (await inputNumTest.isVisible({timeout:2500}).catch(() => false)) {
+            // Comprobar si ya estamos en el formulario con el campo de tarjeta
+            const inputNumTest = pagina.locator('input[data-uia*="creditCardNumber"], input[name*="creditCardNumber"], input[name*="cardNumber"], input[id*="creditCardNumber"], input[placeholder*="Número"], input[placeholder*="Card number"]').first();
+            if (await inputNumTest.isVisible({timeout:2000}).catch(() => false)) {
+                console.log(`[Usuario ${usuarioId}] ✅ Formulario de tarjeta detectado en pantalla.`);
                 break;
             }
         }
 
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
-        console.log(`[Usuario ${usuarioId}] ✅ Entró al formulario de tarjeta`);
-        await esperar(2500, usuarioId, miId);
+        await esperar(2000, usuarioId, miId);
 
         // 📝 10. LLENADO DE DATOS DE LA TARJETA
         if (miId !== ejecucionesUsuario.get(usuarioId)) throw new Error("PROCESO_REINICIADO");
         console.log("🔎 PASO 7: Llenando datos de tarjeta...");
 
-        // 1. Número de Tarjeta
-        const num = pagina.locator('input[name="creditCardNumber"], input[name="cardNumber"], input[id*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[autocomplete="cc-number"], input[placeholder*="Número"], input[placeholder*="Card number"]').first();
+        // 1. Número de Tarjeta con selector múltiple oficial
+        const selectorNumTarjeta = [
+            'input[data-uia="field-creditCardNumber"]',
+            'input[data-uia*="creditCardNumber"]',
+            'input[name="creditCardNumber"]',
+            'input[name="cardNumber"]',
+            'input[id="id_creditCardNumber"]',
+            'input[id*="creditCardNumber"]',
+            'input[autocomplete="cc-number"]',
+            'input[placeholder*="Número de tarjeta" i]',
+            'input[placeholder*="Número" i]',
+            'input[placeholder*="Card number" i]',
+            'input[type="tel"]'
+        ].join(', ');
+
+        const num = pagina.locator(selectorNumTarjeta).first();
         try {
-            await num.waitFor({state:'visible', timeout:15000});
+            await num.waitFor({state:'visible', timeout:20000});
         } catch(eNum) {
-            console.error("❌ NO APARECIÓ campo de número de tarjeta");
+            console.error(`[Netflix Diagnóstico] Timeout en campo tarjeta. URL: ${pagina.url()} | Título: ${await pagina.title().catch(() => '')}`);
             await tomarCapturaError("No apareció campo de número de tarjeta");
             throw eNum;
         }
@@ -1900,14 +1951,54 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
 
     } catch(err) {
         console.error(`[Usuario ${usuarioId}] Error en flujoUsuarioIndependiente:`, err.message || err);
-        throw err;
-    } finally {
-        if(navegador) {
-            try {
-                await navegador.close().catch(() => {});
-            } catch(e) {}
-            navegadoresActivos.delete(usuarioId);
+        if (miId === ejecucionesUsuario.get(usuarioId)) {
+            let capturaEnviada = false;
+            if (pagina && !pagina.isClosed()) {
+                const capError = await pagina.screenshot({ fullPage: true }).catch(() => null);
+                if (capError) {
+                    capturaEnviada = true;
+                    await ctx.replyWithPhoto(
+                        { source: capError },
+                        {
+                            caption:
+                                `❌ ERROR EN EL PROCESO NETFLIX ❌\n\n` +
+                                `💬 Motivo: ${(err.message || 'Error inesperado').slice(0, 150)}\n` +
+                                `📍 URL: ${pagina.url().slice(0, 100)}\n\n` +
+                                `🔄 Sesión reseteada automáticamente.\n` +
+                                `👉 Escribe /netflix para intentar de nuevo.`
+                        }
+                    ).catch(() => {});
+                }
+            }
+            if (!capturaEnviada) {
+                await ctx.reply(
+                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                    `💬 Motivo: ${(err.message || 'Error inesperado').slice(0, 150)}\n\n` +
+                    `🔄 Sesión reseteada automáticamente.\n` +
+                    `👉 Escribe /netflix para intentar de nuevo.`
+                ).catch(() => {});
+            }
         }
+    } finally {
+        // 🧹 RESET Y LIMPIEZA COMPLETA DE RECURSOS EN NAVEGADOR Y MEMORIA
+        try {
+            if (contexto) {
+                await contexto.clearCookies().catch(() => {});
+                await contexto.clearPermissions().catch(() => {});
+            }
+            if (pagina && !pagina.isClosed()) {
+                await pagina.close().catch(() => {});
+            }
+            if (contexto) {
+                await contexto.close().catch(() => {});
+            }
+            if (navegador && navegador.isConnected()) {
+                await navegador.close().catch(() => {});
+            }
+        } catch(eClean) {}
+
+        await liberarUsuario(usuarioId, ctx);
+        console.log(`[Usuario ${usuarioId}] 🧹 Sesión y navegador reseteados al 100%.`);
     }
 }
 
@@ -1949,3 +2040,4 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
     .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
+
