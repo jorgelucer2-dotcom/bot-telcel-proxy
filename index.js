@@ -11,14 +11,17 @@ require('dotenv').config();
 const PUERTO = process.env.PORT || 3000;
 const ES_HEADLESS = process.env.RENDER === 'true' || process.env.HEADLESS === 'true' || (process.platform === 'linux' && process.env.HEADLESS !== 'false');
 
-const BOT_TOKEN = process.env.BOT_TOKEN || '8848937586:AAF5ARZdluPDkxtxhmtoay8v7QVD7wTXQ4E';
+const BOT_TOKEN = process.env.BOT_TOKEN;
+if (!BOT_TOKEN) {
+    console.error("❌ ERROR: La variable de entorno BOT_TOKEN no está configurada.");
+}
 const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
 const URL_NETFLIX = process.env.URL_NETFLIX || 'https://www.netflix.com/mx/';
 const MONTO_TELCEL = 200;
-const TIEMPO_MAX_COMANDO = 240000; // 4 minutos límite por proceso para evitar cuelgues
+const TIEMPO_MAX_COMANDO = 120000; // 2 minutos límite por proceso para evitar bloqueos
 const MAX_USUARIOS = 2; // 🎯 Límite de 2 procesos simultáneos para evitar saturación de memoria
 
-const bot = new Telegraf(BOT_TOKEN, { handlerTimeout: Infinity });
+const bot = new Telegraf(BOT_TOKEN || 'DUMMY_TOKEN', { handlerTimeout: Infinity });
 
 // --------------------------------------------------
 // 🛡️ PROTECCIÓN GLOBAL CONTRA CAÍDAS DE NODE.JS
@@ -642,50 +645,96 @@ bot.action(['cancelarNetflix', 'cancelaNetflix'], async ctx => {
     await enviarLimpio(ctx, "❌ **Proceso Netflix cancelado.** Escribe /start para reiniciar.");
 });
 
-// 🌐 FUNCIÓN UNIVERSAL PARA LANZAR NAVEGADOR DIRECTO (SIN PROXY)
+// 🌐 FUNCIÓN UNIVERSAL PARA LANZAR NAVEGADOR (BRIGHT DATA CDP O LOCAL EXPLÍCITO)
 async function lanzarNavegador({ id, slowMo = 50, geolocation = null }) {
-    console.log("🌐 Abriendo navegador...");
-    const argsBase = [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage', // 🎯 CLAVE EN RENDER / CONTENEDORES
-        '--disable-gpu',
-        '--disable-extensions',
-        '--disable-plugins',
-        '--disable-web-security',
-        '--disable-blink-features=AutomationControlled',
-        '--lang=es-MX'
-    ];
+    let navegador;
+    let contexto;
+    let pagina;
 
-    const navegador = await chromium.launch({
-        headless: ES_HEADLESS,
-        timeout: 60000,
-        slowMo: slowMo,
-        args: argsBase
-    });
+    const wsEndpoint = process.env.BRIGHTDATA_BROWSER_WS;
+    const forzarLocal = process.env.USE_LOCAL_CHROMIUM === 'true';
+
+    // 1. MODO BRIGHT DATA SCRAPING BROWSER (CDP REMOTO)
+    if (wsEndpoint && !forzarLocal) {
+        console.log("[BD] Conectando a Bright Data Scraping Browser vía CDP...");
+        try {
+            navegador = await chromium.connectOverCDP(wsEndpoint, {
+                timeout: 45000,
+                slowMo: slowMo
+            });
+            console.log("[BD] Conexión CDP exitosa.");
+        } catch (errCDP) {
+            console.error("[BD] ERROR DE CONEXIÓN CDP");
+            const mensajeLimpio = (errCDP.message || '').replace(/wss:\/\/[^@]+@/g, 'wss://[REDACTED_CREDENTIALS]@');
+            console.error(`[BD] Tipo: ${errCDP.name || 'Error'} | Detalle: ${mensajeLimpio}`);
+            throw new Error(`Fallo de conexión a Bright Data Scraping Browser: ${mensajeLimpio}`);
+        }
+
+        // Reutilizar contexto remoto existente (arquitectura Bright Data CDP)
+        const contextos = navegador.contexts();
+        contexto = contextos[0] || await navegador.newContext();
+
+        // Aplicar configuraciones de entorno al contexto existente
+        await contexto.grantPermissions(['geolocation']).catch(() => {});
+        await contexto.setGeolocation(geolocation || { latitude: 19.4326, longitude: -99.1332 }).catch(() => {});
+        await contexto.setExtraHTTPHeaders({
+            'Accept-Language': 'es-MX,es;q=0.9'
+        }).catch(() => {});
+
+        // Reutilizar página remota existente o crear una nueva si no existe
+        const paginas = contexto.pages();
+        pagina = paginas[0] || await contexto.newPage();
+
+    // 2. MODO CHROMIUM LOCAL (SOLO SI USE_LOCAL_CHROMIUM=true)
+    } else if (forzarLocal) {
+        console.log("🌐 Abriendo navegador Chromium local (USE_LOCAL_CHROMIUM=true)...");
+        const argsBase = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage', // 🎯 CLAVE EN RENDER / CONTENEDORES
+            '--disable-gpu',
+            '--disable-extensions',
+            '--disable-plugins',
+            '--disable-web-security',
+            '--disable-blink-features=AutomationControlled',
+            '--lang=es-MX'
+        ];
+
+        navegador = await chromium.launch({
+            headless: ES_HEADLESS,
+            timeout: 45000,
+            slowMo: slowMo,
+            args: argsBase
+        });
+
+        const contextOptions = {
+            viewport: null,
+            locale: 'es-MX',
+            timezoneId: 'America/Mexico_City',
+            geolocation: geolocation || { latitude: 19.4326, longitude: -99.1332 },
+            permissions: ['geolocation'],
+            extraHTTPHeaders: {
+                'Accept-Language': 'es-MX,es;q=0.9'
+            },
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+        };
+
+        contexto = await navegador.newContext(contextOptions);
+        pagina = await contexto.newPage();
+
+    // 3. ERROR SI NO HAY CONFIGURACIÓN (SIN FALLBACK SILENCIOSO)
+    } else {
+        console.error("[BD] ERROR: BRIGHTDATA_BROWSER_WS no configurada.");
+        throw new Error("BRIGHTDATA_BROWSER_WS_NO_CONFIGURADA: Configure la variable de entorno BRIGHTDATA_BROWSER_WS en Render o active USE_LOCAL_CHROMIUM=true.");
+    }
 
     navegadoresActivos.set(id, navegador);
 
-    const contextOptions = {
-        viewport: null,
-        locale: 'es-MX',
-        timezoneId: 'America/Mexico_City',
-        geolocation: geolocation || { latitude: 19.4326, longitude: -99.1332 },
-        permissions: ['geolocation'],
-        extraHTTPHeaders: {
-            'Accept-Language': 'es-MX,es;q=0.9',
-            'Referer': 'https://netflix.com/mx/'
-        },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-    };
+    contexto.setDefaultTimeout(30000);
+    contexto.setDefaultNavigationTimeout(45000);
 
-    const contexto = await navegador.newContext(contextOptions);
-    contexto.setDefaultTimeout(240000);
-    contexto.setDefaultNavigationTimeout(240000);
-
-    const pagina = await contexto.newPage();
-    pagina.setDefaultTimeout(240000);
-    pagina.setDefaultNavigationTimeout(240000);
+    pagina.setDefaultTimeout(30000);
+    pagina.setDefaultNavigationTimeout(45000);
 
     await pagina.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -693,7 +742,7 @@ async function lanzarNavegador({ id, slowMo = 50, geolocation = null }) {
         window.chrome = { runtime: {} };
         Object.defineProperty(navigator, 'languages', { get: () => ['es-MX', 'es', 'en-US', 'en'] });
         Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    });
+    }).catch(() => {});
 
     return { navegador, contexto, pagina };
 }
@@ -1007,12 +1056,14 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 // 3) ⏳ BLOQUE DE ESPERA TRAS DAR CLIC EN 'LO QUIERO' DEL PAQUETE $200
                 console.log(`[Telcel Usuario ${id}] ⏳ Esperando carga y campo de teléfono (${inputNumero})...`);
-                await paginaTelcel.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-                await paginaTelcel.waitForSelector('h2:has-text("Número celular")', { state: 'visible', timeout: 18000 }).catch(() => {});
+                await paginaTelcel.waitForSelector('h2:has-text("Número celular"), div:has-text("Número celular")', { state: 'visible', timeout: 18000 }).catch(() => {});
                 await paginaTelcel.locator(inputNumero).waitFor({ state: 'visible', timeout: 18000 });
 
-                // 4) 📱 VALIDACIÓN ANTES DE LLENAR EL NÚMERO
-                if (!(await paginaTelcel.locator(inputNumero).isEnabled())) {
+                // 4) 📱 VALIDACIÓN ANTES DE LLENAR EL NÚMERO (EDITABLE Y HABILITADO)
+                if (!(await paginaTelcel.locator(inputNumero).isEditable().catch(() => false))) {
+                    throw new Error("CAMPO NÚMERO NO EDITABLE");
+                }
+                if (!(await paginaTelcel.locator(inputNumero).isEnabled().catch(() => false))) {
                     throw new Error("CAMPO NÚMERO NO DISPONIBLE");
                 }
 
@@ -2237,43 +2288,171 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
     }
 }
 
+// ==================================================
+// 🧪 FASE 1: PRUEBA AISLADA DE CONECTIVIDAD BRIGHT DATA
+// ==================================================
+async function testConexionNavegador() {
+    console.log("[BD] Iniciando prueba de conexión...");
+
+    const endpoint = process.env.BRIGHTDATA_BROWSER_WS;
+    if (!endpoint || endpoint.trim() === '') {
+        console.error("[BD] ERROR: BRIGHTDATA_BROWSER_WS NO CONFIGURADA");
+        return { exito: false, error: 'BRIGHTDATA_BROWSER_WS_NO_CONFIGURADA' };
+    }
+
+    console.log("[BD] BRIGHTDATA_BROWSER_WS detectada.");
+
+    let browser = null;
+    try {
+        console.log("[BD] Conectando mediante CDP...");
+        browser = await chromium.connectOverCDP(endpoint, {
+            timeout: 45000
+        });
+        console.log("[BD] Conexión CDP exitosa.");
+
+        const contextos = browser.contexts();
+        console.log(`[BD] Contextos disponibles: ${contextos.length}`);
+
+        let contexto;
+        if (contextos.length > 0) {
+            contexto = contextos[0];
+            console.log("[BD] Contexto remoto existente detectado y reutilizado.");
+        } else {
+            console.log("[BD] AVISO: El navegador remoto no expuso un contexto predeterminado.");
+            console.log("[BD] Intentando inicializar un nuevo contexto en la sesión CDP...");
+            try {
+                contexto = await browser.newContext({
+                    locale: 'es-MX',
+                    timezoneId: 'America/Mexico_City'
+                });
+                console.log("[BD] Contexto creado con éxito en la sesión CDP.");
+            } catch (eCtx) {
+                console.error(`[BD] ERROR: La sesión CDP remota no permitió crear un nuevo contexto: ${eCtx.message || eCtx}`);
+                throw new Error(`Fallo al inicializar contexto en sesión CDP: ${eCtx.message || eCtx}`);
+            }
+        }
+
+        try {
+            await contexto.grantPermissions(['geolocation']);
+        } catch (ePerm) {
+            console.log(`[BD] ADVERTENCIA: no se pudo aplicar permissions: ${ePerm.message || ePerm}`);
+        }
+
+        try {
+            await contexto.setGeolocation({ latitude: 19.4326, longitude: -99.1332 });
+        } catch (eGeo) {
+            console.log(`[BD] ADVERTENCIA: no se pudo aplicar geolocation: ${eGeo.message || eGeo}`);
+        }
+
+        try {
+            await contexto.setExtraHTTPHeaders({
+                'Accept-Language': 'es-MX,es;q=0.9'
+            });
+        } catch (eHead) {
+            console.log(`[BD] ADVERTENCIA: no se pudo aplicar Accept-Language: ${eHead.message || eHead}`);
+        }
+
+        const paginas = contexto.pages();
+        console.log(`[BD] Páginas disponibles: ${paginas.length}`);
+
+        let pagina;
+        if (paginas.length > 0) {
+            pagina = paginas[0];
+            console.log("[BD] Página remota existente reutilizada.");
+        } else {
+            console.log("[BD] Creando nueva página en el contexto remoto...");
+            try {
+                pagina = await contexto.newPage();
+                console.log("[BD] Página creada con éxito en el contexto remoto.");
+            } catch (ePag) {
+                console.error(`[BD] ERROR: No se pudo crear página en el contexto remoto: ${ePag.message || ePag}`);
+                throw new Error(`Fallo al crear página en contexto remoto: ${ePag.message || ePag}`);
+            }
+        }
+
+        pagina.setDefaultTimeout(30000);
+        pagina.setDefaultNavigationTimeout(45000);
+
+        console.log("[BD] Navegando a example.com...");
+        const urlPrueba = 'https://example.com';
+        const respuesta = await pagina.goto(urlPrueba, { waitUntil: 'domcontentloaded', timeout: 45000 });
+
+        const statusHttp = respuesta ? respuesta.status() : 200;
+        const urlFinal = pagina.url();
+        const titulo = await pagina.title().catch(() => 'Sin título');
+
+        console.log("[BD] Navegación exitosa.");
+        console.log(`[BD] Status HTTP: ${statusHttp}`);
+        console.log(`[BD] URL final: ${urlFinal}`);
+        console.log(`[BD] Título: ${titulo}`);
+
+        console.log("[BD] PRUEBA BRIGHT DATA EXITOSA.");
+        return { exito: true, status: statusHttp, url: urlFinal, titulo };
+
+    } catch (err) {
+        console.error("[BD] ERROR DE CONEXIÓN");
+        console.error(`[BD] Tipo: ${err.name || 'Error'}`);
+        const mensajeLimpio = (err.message || '').replace(/wss:\/\/[^@]+@/g, 'wss://[REDACTED_CREDENTIALS]@');
+        console.error(`[BD] Mensaje: ${mensajeLimpio}`);
+        return { exito: false, error: err.name || 'Error', mensaje: mensajeLimpio };
+
+    } finally {
+        if (browser) {
+            try {
+                await browser.close();
+            } catch (eClose) {}
+            console.log("[BD] Conexión cerrada correctamente.");
+        }
+    }
+}
+
 // --------------------------------------------------
-// 🌐 SERVIDOR HTTP ESTRUCTURADO Y ARRANQUE CONTROLADO
+// 🌐 CONTROL DE ARRANQUE (RENDER FREE & TEST MODE)
 // --------------------------------------------------
-let servidor;
+const ES_MODO_PRUEBA_BD = process.env.TEST_BRIGHT_DATA === 'true';
 
-servidor = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Bot activo y funcionando ✅');
-});
+if (ES_MODO_PRUEBA_BD) {
+    // 🧪 Modo diagnóstico exclusivo: ejecuta la prueba de Bright Data y termina el proceso
+    testConexionNavegador().then(resultado => {
+        process.exit(resultado.exito ? 0 : 1);
+    });
+} else {
+    // 🚀 Modo normal: servidor HTTP + Bot de Telegram
+    let servidor;
 
-// 🧹 CIERRE LIMPIO PARA NO DEJAR PROCESOS ABIERTOS NI PUERTOS BLOQUEADOS
-process.once('SIGINT', async () => {
-    console.log("🔄 Cerrando limpiamente...");
-    try { await bot.stop('SIGINT'); } catch(e) {}
-    await limpiarRecursosTotales();
-    servidor.close(() => process.exit(0));
-});
+    servidor = http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Bot activo y funcionando ✅');
+    });
 
-process.once('SIGTERM', async () => {
-    console.log("🔄 Terminando limpiamente...");
-    try { await bot.stop('SIGTERM'); } catch(e) {}
-    await limpiarRecursosTotales();
-    servidor.close(() => process.exit(0));
-});
+    process.once('SIGINT', async () => {
+        console.log("🔄 Cerrando limpiamente...");
+        try { await bot.stop('SIGINT'); } catch(e) {}
+        await limpiarRecursosTotales();
+        servidor.close(() => process.exit(0));
+    });
 
-// 📡 1. SERVIDOR ESCUCHA PRIMERO, LUEGO INICIA TELEGRAM CUANDO EL PUERTO ESTÉ LIBRE
-servidor.listen(PUERTO, '0.0.0.0', () => {
-    console.log(`✅ SERVIDOR LISTO EN PUERTO: ${PUERTO}`);
-    console.log("⏳ Iniciando conexión Telegram...");
+    process.once('SIGTERM', async () => {
+        console.log("🔄 Terminando limpiamente...");
+        try { await bot.stop('SIGTERM'); } catch(e) {}
+        await limpiarRecursosTotales();
+        servidor.close(() => process.exit(0));
+    });
 
-    bot.launch({
-        dropPendingUpdates: true,
-        polling: true,
-        timeout: 25000
-    })
-    .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
-    .catch(err => console.error("❌ ERROR BOT:", err.message || err));
-});
+    servidor.listen(PUERTO, '0.0.0.0', () => {
+        console.log(`✅ SERVIDOR LISTO EN PUERTO: ${PUERTO}`);
+        console.log("⏳ Iniciando conexión Telegram...");
+
+        bot.launch({
+            dropPendingUpdates: true,
+            polling: true,
+            timeout: 25000
+        })
+        .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
+        .catch(err => console.error("❌ ERROR BOT:", err.message || err));
+    });
+}
+
+module.exports = { testConexionNavegador };
 
 
