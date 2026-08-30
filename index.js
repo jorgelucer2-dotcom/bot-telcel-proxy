@@ -59,6 +59,86 @@ const sesiones = { recarga: new Map(), netflix: new Map() };
 const sesionesUsuario = sesiones.netflix; // Alias para compatibilidad con flujo Netflix
 const navegadoresActivos = new Map();
 const ejecucionesUsuario = new Map();
+const ultimoMensaje = new Map(); // chat_id -> message_id
+
+// 🧼 FUNCIÓN CENTRAL: ENVÍO LIMPIO (BORRA MENSAJES ANTERIORES)
+async function enviarLimpio(ctx, texto, opciones = {}) {
+    const id = ctx.chat?.id || ctx.from?.id;
+    if (!id) return ctx.reply(texto, opciones);
+
+    // 1. Borrar mensaje anterior del bot si existe
+    if (ultimoMensaje.has(id)) {
+        const msgPrevioId = ultimoMensaje.get(id);
+        if (msgPrevioId) {
+            await ctx.deleteMessage(msgPrevioId).catch(() => {});
+        }
+        ultimoMensaje.delete(id);
+    }
+
+    // 2. Borrar mensaje del usuario para evitar acumulación
+    if (ctx.message?.message_id) {
+        await ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+    }
+
+    // 3. Enviar nuevo mensaje y registrar su ID
+    const nuevoMsg = await ctx.reply(texto, opciones).catch(err => {
+        console.error(`[enviarLimpio Usuario ${id}] Error:`, err.message || err);
+        return null;
+    });
+
+    if (nuevoMsg && nuevoMsg.message_id) {
+        ultimoMensaje.set(id, nuevoMsg.message_id);
+    }
+    return nuevoMsg;
+}
+
+// 🧼 ENVÍO LIMPIO DE FOTOS / CAPTURAS
+async function enviarFotoLimpia(ctx, foto, opciones = {}) {
+    const id = ctx.chat?.id || ctx.from?.id;
+    if (!id) return ctx.replyWithPhoto(foto, opciones);
+
+    if (ultimoMensaje.has(id)) {
+        const msgPrevioId = ultimoMensaje.get(id);
+        if (msgPrevioId) {
+            await ctx.deleteMessage(msgPrevioId).catch(() => {});
+        }
+        ultimoMensaje.delete(id);
+    }
+
+    if (ctx.message?.message_id) {
+        await ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+    }
+
+    const nuevoMsg = await ctx.replyWithPhoto(foto, opciones).catch(err => {
+        console.error(`[enviarFotoLimpia Usuario ${id}] Error:`, err.message || err);
+        return null;
+    });
+
+    if (nuevoMsg && nuevoMsg.message_id) {
+        ultimoMensaje.set(id, nuevoMsg.message_id);
+    }
+    return nuevoMsg;
+}
+
+// 🧼 LIMPIEZA TOTAL DE SESIÓN Y MENSAJES
+async function limpiarSesion(ctx) {
+    const id = ctx.chat?.id || ctx.from?.id;
+    if (!id) return;
+
+    if (ultimoMensaje.has(id)) {
+        const msgPrevioId = ultimoMensaje.get(id);
+        if (msgPrevioId) {
+            await ctx.deleteMessage(msgPrevioId).catch(() => {});
+        }
+        ultimoMensaje.delete(id);
+    }
+
+    if (ctx.message?.message_id) {
+        await ctx.deleteMessage(ctx.message.message_id).catch(() => {});
+    }
+
+    await liberarUsuario(id, ctx);
+}
 
 // 🧹 Verificar cupo concurrente (Máximo 2 simultáneos en plan gratuito)
 function tieneCupo(id) {
@@ -214,100 +294,91 @@ function generarContrasena() {
     return Array.from({ length: 12 }, () => caracteresPass[Math.floor(Math.random() * caracteresPass.length)]).join('');
 }
 
-// 📌 MENÚ PRINCIPAL MULTIUSUARIO
-bot.start(ctx => {
+// 📌 MENÚ PRINCIPAL MULTIUSUARIO (MINIMALISTA Y LIMPIO)
+bot.start(async ctx => {
+    await limpiarSesion(ctx);
     const id = ctx.from.id;
     sesionesUsuario.set(id, { paso: 'menu', modo: 'auto', correo: null, pass: null });
 
-    ctx.reply(
-        `👋 BOT SERVICIOS\n` +
+    await enviarLimpio(
+        ctx,
+        `🤖 **MENÚ PRINCIPAL**\n` +
         `━━━━━━━━━━━━━━━━━━\n` +
-        `📱 /recarga → Recarga Telcel $${MONTO_TELCEL}\n` +
-        `✅ Genera: Nombre\n` +
-        `💳 Tú das: Número | Tarjeta | Fecha | CVV\n\n` +
-        `🎬 /netflix → Crear Cuenta\n` +
-        `✅ Opción: 🎲 Automática o ✍️ Tú pones datos\n` +
-        `━━━━━━━━━━━━━━━━━━`,
+        `Selecciona el servicio que deseas utilizar:\n\n` +
+        `📱 **Recarga Telcel $200**\n` +
+        `🎬 **Netflix Premium (México)**`,
         Markup.keyboard([
-            ['🎲 Automático', '✍️ Manual', '📱 Recarga Telcel $200']
+            ['📱 RECARGA TELCEL $200'],
+            ['🎬 NETFLIX PREMIUM']
         ]).resize()
     );
 });
 
-// Botón 📱 Recarga Telcel $200
-bot.hears(['📱 Recarga Telcel $200', 'Recarga Telcel', 'recarga telcel'], ctx => {
-    const id = ctx.from.id;
-    sesionesUsuario.set(id, { paso: 'esperando_numero_telcel' });
-    ctx.reply(
-        `💰 RECARGA TELCEL $${MONTO_TELCEL} MXN 💰\n\n` +
-        `📲 Por favor, escribe tu NÚMERO TELCEL a 10 dígitos:\n` +
-        `Ejemplo: 5512345678`,
+// Botón 📱 RECARGA TELCEL $200
+bot.hears(['📱 RECARGA TELCEL $200', '📱 Recarga Telcel $200', 'Recarga Telcel', 'recarga telcel', 'Recarga Telcel $200'], async ctx => {
+    const id = ctx.chat?.id || ctx.from?.id;
+    await liberarUsuario(id, ctx);
+    sesiones.recarga.set(id, { paso: 1 });
+    await enviarLimpio(
+        ctx,
+        `💰 **RECARGA TELCEL $${MONTO_TELCEL} MXN**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📲 **PASO 1:** Escribe tu número celular a 10 dígitos:\n` +
+        `Ejemplo: \`5512345678\``,
         Markup.removeKeyboard()
     );
 });
 
-// Botón 🎲 Automático
-bot.hears(['🎲 Automático', 'Automático', 'automatico'], ctx => {
-    const id = ctx.from.id;
-    sesionesUsuario.set(id, { modo: 'auto', paso: 'esperando_tarjeta', correo: null, pass: null });
-    ctx.reply(
-        "🎲 MODO AUTOMÁTICO ACTIVADO\n\n" +
-        "El bot generará el correo, contraseña y nombre aleatoriamente.\n\n" +
-        "📌 Envía tus datos en este formato:\n" +
-        "👉 /crear TARJETA|MM|AAAA|CVV\n\n" +
-        "Ejemplo:\n" +
-        "4111111111111111|12|2028|123",
-        Markup.removeKeyboard()
-    );
-});
-
-// Botón ✍️ Manual (Paso a paso interactivo)
-bot.hears(['✍️ Manual', 'Manual', 'manual'], ctx => {
-    const id = ctx.from.id;
-    sesionesUsuario.set(id, { modo: 'manual', paso: 'esperando_correo', correo: null, pass: null });
-    ctx.reply(
-        "✍️ MODO MANUAL ACTIVADO\n\n" +
-        "📝 Por favor, escribe el CORREO ELECTRÓNICO que deseas usar:",
-        Markup.removeKeyboard()
+// Botón 🎬 NETFLIX PREMIUM
+bot.hears(['🎬 NETFLIX PREMIUM', '🎬 Netflix Premium', 'Netflix Premium', 'netflix premium', 'netflix', '🎲 Automático', '✍️ Manual'], async ctx => {
+    const id = ctx.chat?.id || ctx.from?.id;
+    await liberarUsuario(id, ctx);
+    sesiones.netflix.set(id, { paso: 'menu_netflix' });
+    await enviarLimpio(
+        ctx,
+        `🎬 **NETFLIX PREMIUM MÉXICO**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `Elige el método de datos para tu cuenta:`,
+        Markup.inlineKeyboard([
+            [Markup.button.callback("🎲 Modo Automático", "netAuto")],
+            [Markup.button.callback("✍️ Modo Personalizado", "netPerso")]
+        ])
     );
 });
 
 // Botón 🟢 Sí, crear otra
-bot.hears(['🟢 Sí, crear otra', 'Sí, crear otra', 'Si', 'Sí', 'si', 'sí'], ctx => {
+bot.hears(['🟢 Sí, crear otra', 'Sí, crear otra', 'Si', 'Sí', 'si', 'sí'], async ctx => {
+    await limpiarSesion(ctx);
     const id = ctx.from.id;
     sesionesUsuario.set(id, { paso: 'menu', modo: 'auto', correo: null, pass: null });
-    ctx.reply(
-        '🤖 SELECCIONA CÓMO QUIERES EMPEZAR:\n\n' +
-        '1️⃣ 🎲 AUTOMÁTICO → Genera correo y contraseña\n' +
-        '2️⃣ ✍️ MANUAL → Tú pones tus datos\n\n' +
-        '👇 ELIGE UNA OPCIÓN:',
+    await enviarLimpio(
+        ctx,
+        `🤖 **MENÚ PRINCIPAL**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `Selecciona el servicio que deseas utilizar:`,
         Markup.keyboard([
-            ['🎲 Automático', '✍️ Manual']
+            ['📱 RECARGA TELCEL $200'],
+            ['🎬 NETFLIX PREMIUM']
         ]).resize()
     );
 });
 
 // Botón 🔴 No, terminar
-bot.hears(['🔴 No, terminar', 'No, terminar', 'No', 'no'], ctx => {
-    const id = ctx.from.id;
-    if (navegadoresActivos.has(id)) {
-        try {
-            navegadoresActivos.get(id).close().catch(() => {});
-        } catch(e) {}
-        navegadoresActivos.delete(id);
-    }
-    sesionesUsuario.delete(id);
-    ctx.reply(
-        '👋 PROCESO FINALIZADO POR COMPLETO\n\n' +
-        '✅ Todos los recursos han sido liberados.\n' +
-        '📌 Cuando gustes volver a usar el bot, simplemente escribe /start',
+bot.hears(['🔴 No, terminar', 'No, terminar', 'No', 'no'], async ctx => {
+    await limpiarSesion(ctx);
+    await enviarLimpio(
+        ctx,
+        `👋 **PROCESO FINALIZADO**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `✅ Todos los recursos han sido liberados al 100%.\n` +
+        `📌 Cuando gustes volver a usar el bot, escribe /start`,
         Markup.removeKeyboard()
     );
 });
 
 // Listener de mensajes de texto: TELCEL PRIMERO Y EXCLUSIVO
 bot.on('text', async (ctx, next) => {
-    const id = ctx.chat.id;
+    const id = ctx.chat?.id || ctx.from?.id;
     const txt = ctx.message.text.trim();
 
     if (txt.startsWith('/')) {
@@ -321,16 +392,18 @@ bot.on('text', async (ctx, next) => {
         // PASO 1: RECIBIR NÚMERO
         if (estado.paso === 1 || estado.paso === 'numero' || estado.paso === 'esperando_numero_telcel') {
             if (!/^\d{10}$/.test(txt)) {
-                await ctx.reply("❌ No son 10 dígitos. Intenta de nuevo:");
+                await enviarLimpio(ctx, "❌ Número inválido (deben ser 10 dígitos).\n\n📲 Escribe tu número celular:");
                 return;
             }
             // ✅ ACTUALIZA ESTADO: PASO 2 = TARJETA
             sesiones.recarga.set(id, { paso: 2, numero: txt });
-            await ctx.reply(
-                `✅ NÚMERO RECIBIDO: ${txt}\n` +
-                `💳 AHORA TARJETA:\n` +
-                `Formato: 16DÍGITOS|MM|AAAA|CVV\n` +
-                `Ejemplo: 4111111111111111|08|2027|123`
+            await enviarLimpio(
+                ctx,
+                `✅ **NÚMERO RECIBIDO:** \`${txt}\`\n` +
+                `━━━━━━━━━━━━━━━━━━\n` +
+                `💳 **PASO 2:** Envía tus datos de tarjeta:\n` +
+                `Formato: \`16DÍGITOS|MM|AAAA|CVV\`\n` +
+                `Ejemplo: \`4111111111111111|08|2027|123\``
             );
             return;
         }
@@ -339,19 +412,21 @@ bot.on('text', async (ctx, next) => {
         if (estado.paso === 2 || estado.paso === 'tarjeta' || estado.paso === 'esperando_tarjeta_telcel') {
             const partes = txt.split('|').map(p => p.trim());
             if (partes.length !== 4) {
-                await ctx.reply(
-                    "❌ Formato inválido.\n" +
-                    "📌 Usa el formato: 16DÍGITOS|MM|AAAA|CVV\n" +
-                    "Ejemplo: 4111111111111111|08|2027|123\n\n" +
-                    "👉 Intenta de nuevo o escribe /recarga para reiniciar."
+                await enviarLimpio(
+                    ctx,
+                    "❌ Formato de tarjeta inválido.\n\n" +
+                    "📌 Usa el formato: `16DÍGITOS|MM|AAAA|CVV`\n" +
+                    "Ejemplo: `4111111111111111|08|2027|123`\n\n" +
+                    "👉 Intenta de nuevo:"
                 );
                 return;
             }
             const [cc, mes, anioCompleto, cvv] = partes;
             if (!cc || !mes || !anioCompleto || !cvv) {
-                await ctx.reply(
-                    "❌ Faltan datos en la tarjeta.\n" +
-                    "📌 Formato: 16DÍGITOS|MM|AAAA|CVV\n" +
+                await enviarLimpio(
+                    ctx,
+                    "❌ Faltan datos en la tarjeta.\n\n" +
+                    "📌 Formato: `16DÍGITOS|MM|AAAA|CVV`\n" +
                     "👉 Intenta de nuevo:"
                 );
                 return;
@@ -360,23 +435,23 @@ bot.on('text', async (ctx, next) => {
             const numero = estado.numero;
             const nombre = generarNombreCompleto();
 
-            // ✅ GUARDA TODO EN SESIÓN EXCLUSIVA DE ESTE USUARIO
             sesiones.recarga.set(id, { numero, cc, mes, aa: anio, anio, cvv, nombre });
 
-            await ctx.reply(
-                `✅ CONFIRMACIÓN\n` +
-                `━━━━━━━━━━━━━━━━\n` +
-                `💰 MONTO: $${MONTO_TELCEL}\n` +
-                `📱 NÚMERO: ${numero}\n` +
-                `👤 TITULAR: ${nombre}\n` +
-                `💳 TARJETA: ****${cc.slice(-4)}\n` +
-                `📅 FECHA: ${mes}/${anio}\n` +
-                `🔒 CVV: ***\n` +
-                `━━━━━━━━━━━━━━━━\n` +
-                `¿TODO CORRECTO?`,
+            await enviarLimpio(
+                ctx,
+                `📋 **CONFIRMACIÓN DE RECARGA**\n` +
+                `━━━━━━━━━━━━━━━━━━\n` +
+                `💰 **Monto:** $${MONTO_TELCEL} MXN\n` +
+                `📱 **Número:** \`${numero}\`\n` +
+                `👤 **Titular:** ${nombre}\n` +
+                `💳 **Tarjeta:** \`****${cc.slice(-4)}\`\n` +
+                `📅 **Vence:** ${mes}/${anio}\n` +
+                `🔒 **CVV:** ***\n` +
+                `━━━━━━━━━━━━━━━━━━\n` +
+                `¿Deseas procesar la recarga ahora?`,
                 Markup.inlineKeyboard([
-                    [Markup.button.callback("✅ INICIAR", "ok")],
-                    [Markup.button.callback("❌", "no")]
+                    [Markup.button.callback("✅ SÍ, PAGAR", "pagarTelcel")],
+                    [Markup.button.callback("❌ CANCELAR", "cancelaTelcel")]
                 ])
             );
             return;
@@ -391,22 +466,23 @@ bot.on('text', async (ctx, next) => {
             estado.correo = txt;
             estado.paso = 'pass';
             sesiones.netflix.set(id, estado);
-            await ctx.reply("🔑 CONTRASEÑA:");
+            await enviarLimpio(ctx, "🔑 **Ingresa la CONTRASEÑA para tu cuenta:**");
             return;
         } else if (estado.paso === 'pass' || estado.paso === 'pedirPassPersonal' || estado.paso === 'esperando_pass') {
             estado.pass = txt;
             estado.paso = 'tarjeta';
             sesiones.netflix.set(id, estado);
             const { correo, pass } = estado;
-            await ctx.reply(
-                `✅ DATOS NETFLIX\n` +
-                `━━━━━━━━━━━━━━━━\n` +
-                `📧 ${correo}\n` +
-                `🔑 ${pass}\n` +
-                `━━━━━━━━━━━━━━━━\n\n` +
-                `💳 Ahora envía tus datos de tarjeta:\n` +
-                `👉 /crear TARJETA|MM|AAAA|CVV\n` +
-                `Ej: 4111111111111111|12|2028|123`
+            await enviarLimpio(
+                ctx,
+                `✅ **DATOS NETFLIX GUARDADOS**\n` +
+                `━━━━━━━━━━━━━━━━━━\n` +
+                `📧 **Correo:** \`${correo}\`\n` +
+                `🔑 **Contraseña:** \`${pass}\`\n` +
+                `━━━━━━━━━━━━━━━━━━\n\n` +
+                `💳 **Ahora envía tus datos de tarjeta:**\n` +
+                `👉 \`TARJETA|MM|AAAA|CVV\`\n` +
+                `Ejemplo: \`4111111111111111|12|2028|123\``
             );
             return;
         }
@@ -422,13 +498,12 @@ bot.on('text', async (ctx, next) => {
 
 // 🛑 PARO TOTAL / RESET INDEPENDIENTE POR USUARIO
 bot.command(['reset', 'paro', 'parototal', 'stop', 'cancelar', 'kill', 'limpiar'], async ctx => {
-    const id = ctx.from?.id || ctx.chat?.id;
-    await liberarUsuario(id, ctx);
-
-    await ctx.reply(
-        "🛑 PROCESO CANCELADO Y LIBERADO\n\n" +
-        "✅ Tu navegador ha sido cerrado y tu sesión reiniciada al 100%.\n" +
-        "📌 Escribe /recarga o /start para comenzar de nuevo.",
+    await limpiarSesion(ctx);
+    await enviarLimpio(
+        ctx,
+        `🛑 **PROCESO CANCELADO Y LIBERADO**\n\n` +
+        `✅ El navegador se cerró y tu sesión se reinició al 100%.\n` +
+        `📌 Escribe /start para comenzar de nuevo.`,
         Markup.removeKeyboard()
     );
 });
@@ -439,10 +514,10 @@ bot.command(['reiniciar', 'reintentar'], async ctx => {
     const s = sesionesUsuario.get(id);
 
     if (!s || !s.ultimaTarjeta) {
-        return ctx.reply("⚠️ No tienes datos de tarjeta previos para reiniciar.\n📌 Envía: /crear TARJETA|MM|AAAA|CVV");
+        return enviarLimpio(ctx, "⚠️ No tienes datos de tarjeta previos para reiniciar.\n📌 Envía: /crear TARJETA|MM|AAAA|CVV");
     }
 
-    await ctx.reply("🔄 REINICIANDO TU REGISTRO DESDE CERO...");
+    await enviarLimpio(ctx, "🔄 **REINICIANDO TU REGISTRO DESDE CERO...**");
     await iniciarProcesoUsuario(ctx, s.ultimaTarjeta, id);
 });
 
@@ -452,10 +527,10 @@ bot.command(['reiniciar', 'reintentar'], async ctx => {
 bot.command(['recarga', 'telcel'], async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
     if (!tieneCupo(id)) {
-        return ctx.reply("❌ Servidor ocupado (8/8 procesos concurrentes).\n⏳ Por favor espera unos momentos e intenta de nuevo.");
+        return enviarLimpio(ctx, "❌ Servidor ocupado. Por favor espera unos momentos e intenta de nuevo.");
     }
-    await liberarUsuario(id, ctx); // Proactivamente libera cualquier proceso o navegador anterior
-    sesiones.recarga.set(id, { paso: 1 }); // Paso 1 = Número
+    await liberarUsuario(id, ctx);
+    sesiones.recarga.set(id, { paso: 1 });
 
     const texto = ctx.message.text.trim();
     const args = texto.substring(texto.indexOf(' ') + 1).trim();
@@ -472,17 +547,18 @@ bot.command(['recarga', 'telcel'], async ctx => {
 
             sesiones.recarga.set(id, { numero, cc, mes, anio, cvv, nombre });
 
-            return ctx.reply(
-                `✅ CONFIRMACIÓN\n` +
-                `━━━━━━━━━━━━━━━━\n` +
-                `💰 MONTO: $${MONTO_TELCEL}\n` +
-                `📱 NÚMERO: ${numero}\n` +
-                `👤 TITULAR: ${nombre}\n` +
-                `💳 TARJETA: **${cc.slice(-4)}\n` +
-                `📅 FECHA: ${mes}/${anio}\n` +
-                `🔒 CVV: *\n` +
-                `━━━━━━━━━━━━━━━━\n` +
-                `¿TODO CORRECTO?`,
+            return enviarLimpio(
+                ctx,
+                `📋 **CONFIRMACIÓN DE RECARGA**\n` +
+                `━━━━━━━━━━━━━━━━━━\n` +
+                `💰 **Monto:** $${MONTO_TELCEL} MXN\n` +
+                `📱 **Número:** \`${numero}\`\n` +
+                `👤 **Titular:** ${nombre}\n` +
+                `💳 **Tarjeta:** \`****${cc.slice(-4)}\`\n` +
+                `📅 **Vence:** ${mes}/${anio}\n` +
+                `🔒 **CVV:** ***\n` +
+                `━━━━━━━━━━━━━━━━━━\n` +
+                `¿Deseas procesar la recarga ahora?`,
                 Markup.inlineKeyboard([
                     [Markup.button.callback("✅ SÍ, PAGAR", "pagarTelcel")],
                     [Markup.button.callback("❌ CANCELAR", "cancelaTelcel")]
@@ -492,10 +568,12 @@ bot.command(['recarga', 'telcel'], async ctx => {
     }
 
     // Flujo interactivo paso a paso
-    await ctx.reply(
-        `💰 RECARGA TELCEL $${MONTO_TELCEL}\n` +
-        `📲 Escribe NÚMERO (10 dígitos):\n` +
-        `Ejemplo: 5512345678`,
+    await enviarLimpio(
+        ctx,
+        `💰 **RECARGA TELCEL $${MONTO_TELCEL} MXN**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📲 **PASO 1:** Escribe tu número celular a 10 dígitos:\n` +
+        `Ejemplo: \`5512345678\``,
         Markup.removeKeyboard()
     );
 });
@@ -504,21 +582,22 @@ bot.command(['recarga', 'telcel'], async ctx => {
 bot.command('netflix', async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
     if (!tieneCupo(id)) {
-        return ctx.reply("❌ Servidor ocupado (8/8 procesos concurrentes).\n⏳ Por favor espera unos momentos e intenta de nuevo.");
+        return enviarLimpio(ctx, "❌ Servidor ocupado. Por favor espera unos momentos e intenta de nuevo.");
     }
     if (sesiones.recarga.has(id)) {
-        await ctx.reply("❌ TERMINA LA RECARGA PRIMERO\nUsa /cancela o /reset si deseas cancelar.");
+        await enviarLimpio(ctx, "❌ Termina la recarga primero o usa /reset para cancelar.");
         return;
     }
     sesiones.netflix.set(id, { paso: 'menu_netflix' });
 
-    ctx.reply(
-        '🎬 NETFLIX: ¿Cómo crear? 👇\n' +
-        '━━━━━━━━━━━━━━━━\n' +
-        'Elige el método de datos para tu cuenta:',
+    await enviarLimpio(
+        ctx,
+        `🎬 **NETFLIX PREMIUM MÉXICO**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `Elige el método de datos para tu cuenta:`,
         Markup.inlineKeyboard([
-            [Markup.button.callback("🎲 Automático", "netAuto")],
-            [Markup.button.callback("✍️ Personalizado", "netPerso")]
+            [Markup.button.callback("🎲 Modo Automático", "netAuto")],
+            [Markup.button.callback("✍️ Modo Personalizado", "netPerso")]
         ])
     );
 });
@@ -531,15 +610,17 @@ bot.action(['netflixAuto', 'netAuto'], async ctx => {
     const pass = generarContrasena();
     sesionesUsuario.set(id, { modo: 'auto', paso: 'esperando_tarjeta', correo, pass });
 
-    await ctx.reply(
-        `✅ DATOS GENERADOS\n` +
-        `━━━━━━━━━━━━━━━━\n` +
-        `📧 CORREO: ${correo}\n` +
-        `🔑 CONTRASEÑA: ${pass}\n` +
-        `━━━━━━━━━━━━━━━━\n\n` +
-        `💳 Ahora ingresa los datos de tu tarjeta:\n` +
-        `👉 /crear TARJETA|MM|AAAA|CVV\n\n` +
-        `Ejemplo: 4111111111111111|12|2028|123`
+    await enviarLimpio(
+        ctx,
+        `🎲 **MODO AUTOMÁTICO ACTIVADO**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📧 **Correo:** \`${correo}\`\n` +
+        `🔑 **Contraseña:** \`${pass}\`\n` +
+        `━━━━━━━━━━━━━━━━━━\n\n` +
+        `💳 **Envía tus datos de tarjeta en este formato:**\n` +
+        `👉 \`TARJETA|MM|AAAA|CVV\`\n\n` +
+        `Ejemplo:\n` +
+        `\`4111111111111111|12|2028|123\``
     );
 });
 
@@ -548,14 +629,17 @@ bot.action(['netflixPersonal', 'netPerso'], async ctx => {
     const id = ctx.from.id;
     await ctx.answerCbQuery().catch(() => {});
     sesionesUsuario.set(id, { modo: 'manual', paso: 'pedirCorreoPersonal', correo: null, pass: null });
-    await ctx.reply("✍️ ESCRIBE TU CORREO ELECTRÓNICO:");
+    await enviarLimpio(
+        ctx,
+        `✍️ **MODO PERSONALIZADO**\n` +
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📝 Por favor, escribe el **CORREO ELECTRÓNICO** que deseas usar:`
+    );
 });
 
 bot.action(['cancelarNetflix', 'cancelaNetflix'], async ctx => {
-    const id = ctx.from.id;
-    await ctx.answerCbQuery().catch(() => {});
-    sesionesUsuario.delete(id);
-    await ctx.reply("❌ CANCELADO /netflix");
+    await limpiarSesion(ctx);
+    await enviarLimpio(ctx, "❌ **Proceso Netflix cancelado.** Escribe /start para reiniciar.");
 });
 
 // 🌐 FUNCIÓN UNIVERSAL PARA LANZAR NAVEGADOR DIRECTO (SIN PROXY)
@@ -716,19 +800,30 @@ bot.action('nueva_cuenta_netflix', async ctx => {
 function locatorSeguro(pagina, clave) {
     const mapaSelectores = {
         botonPermitir: 'button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido")',
-        botonVerMas: 'div[role="button"]:has-text("Ver más paquetes"), svg[viewBox="0 0 24 24"], div:has-text("Ver más paquetes"), div[role="button"] svg, button[aria-expanded="false"], button:has-text("Ver más paquetes"), button:has-text("Ver más"), a:has-text("Ver más")',
+        // Paso 1: Ver más paquetes
+        botonVerMas: 'button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes"), button.border-fuchsia-800, div[role="button"]:has-text("Ver más paquetes"), svg[viewBox="0 0 24 24"]',
+        // Paso 2: Lo quiero de $200
         paquete200: 'text="Amigo Sin Límite $200", text="$200"',
-        botonLoQuiero200: 'div:has-text("Amigo Sin Límite $200") button:has-text("Lo quiero"), button:has-text("Lo quiero"), button:has-text("Comprar"), button:has-text("Seleccionar"), button:has-text("Elegir"), button:has-text("Recargar"), b:has-text("Lo quiero")',
-        telefono: 'section:has(h2:has-text("Número celular")) input#phone, input[type="tel"][name="phone"], section:has(h2:has-text("Número celular")) input, div:has-text("Número celular") + div input, div[aria-labelledby*="phone"] input[type="tel"], input[placeholder*="celular" i], input[aria-label="Número celular"], input#id-phone, input[type="tel"], input[name="phone"], input[name*="phone"], input[placeholder*="10 dígitos" i], input[maxlength="10"]',
-        botonContinuarTel: 'button[type="submit"]:has-text("Continuar"), button.btn-next, button:has-text("Continuar"), button:has-text("Siguiente"), button[type="submit"]',
-        tarjeta: 'input[name="cardNumber"][inputmode="numeric"], input[name="cardNumber"], input[placeholder*="16 dígitos" i], input[placeholder*="16" i], input#creditCardNumber, input[name*="creditCardNumber"], input[data-uia*="creditCardNumber"], input[id="id_creditCardNumber"]',
-        nombreTitular: 'input[name="cardHolderName"], input[placeholder*="Nombre completo" i], input[placeholder*="Nombre" i], #creditCardName, input[name*="creditCardName"], input[name*="name" i]',
-        fechaExpiracion: 'input[name="cardExpiry"][placeholder="MM / AA"], input[name="cardExpiry"], input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i], input[placeholder*="Vencimiento" i], input[name*="exp"]',
-        mes: 'input[placeholder="MM"], input#month, input[name*="month"], div.relative.w-full input[placeholder="MM"], select[name*="month" i], select[name*="mes" i], #expMonth, input[placeholder*="Mes" i]',
-        anio: 'input[placeholder="AA"], input#year, input[name*="year"], div.relative.w-full input[placeholder="AA"], select[name*="year" i], select[name*="anio" i], #expYear, input[placeholder*="Año" i]',
-        cvv: 'input[name="cardCvv"][maxlength="4"], input[name="cardCvv"], input[placeholder*="000" i], input[placeholder*="CVV" i], input[placeholder*="CVC" i], input[placeholder*="Seguridad" i], input#cvv-input, input#cvv, input[name*="cvv" i], input[name*="securityCode" i]',
+        botonLoQuiero200: 'b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, b:has-text("Lo quiero"), div:has-text("Amigo Sin Límite $200") b:has-text("Lo quiero"), div:has-text("$200") b:has-text("Lo quiero"), button:has-text("Lo quiero")',
+        // Paso 3: Número celular 10 dígitos (input#id-phone-p)
+        telefono: 'input#id-phone-p, input#id-phone, section:has(h2:has-text("Número celular")) input, input[type="tel"][name="phone"], input[type="tel"]',
+        // Paso 4: Botón Continuar activado morado
+        botonContinuarTel: 'button.fontBoldAMX:has-text("Continuar"), button.bg-\[\#7b1fa2\]:has-text("Continuar"), button:has-text("Continuar"), button[type="submit"]',
+        // Paso 5: 16 dígitos tarjeta (input#creditCardNumber)
+        tarjeta: 'input#creditCardNumber, input[placeholder*="16 dígitos" i], input[name="cardNumber"][inputmode="numeric"], input[name="cardNumber"]',
+        // Paso 6: Nombre del titular (input#creditCardName)
+        nombreTitular: 'input#creditCardName, input[placeholder*="Nombre completo" i], input[name="cardHolderName"]',
+        // Paso 7: Mes MM (input#month)
+        mes: 'input#month, input.exp[placeholder="MM"], input[placeholder="MM"]',
+        // Paso 9: Año AA (input#year)
+        anio: 'input#year, input.exp[placeholder="AA"], input[placeholder="AA"]',
+        fechaExpiracion: 'input[name="cardExpiry"][placeholder="MM / AA"], input[placeholder*="MM / AA" i], input[placeholder*="MM/AA" i]',
+        // Paso 10: CVV 000 (input#cvv-input)
+        cvv: 'input#cvv-input, input[placeholder="000"], input[name="cardCvv"], input[placeholder*="CVV" i]',
+        // Paso 11 & 12: Botón Continuar / Continuar con mi tarjeta física
+        botonTarjetaFisica: 'button.ModalInvitation_buttonModal__42s7X, button:has-text("Continuar con mi tarjeta física"), button:has-text("tarjeta física")',
         terminos: 'input[type="checkbox"]#terms, input[type="checkbox"][name*="terms" i], label[for*="terms" i], input[type="checkbox"]',
-        botonPagar: 'button:has-text("Pagar"), button[type="submit"].btn-pay, button[type="submit"]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar"), button:has-text("Recargar")'
+        botonPagar: 'button[type="submit"].bg-\[\#7b1fa2\]:has-text("Continuar"), button[type="submit"]:has-text("Continuar"), button.fontBoldAMX:has-text("Continuar"), button:has-text("Continuar"), button:has-text("Pagar")'
     };
 
     const selector = mapaSelectores[clave] || clave;
@@ -767,6 +862,16 @@ async function ejecutarConReintento(fn, intentosMax = 3, id, ctx) {
 async function flujoTelcelIndependiente(ctx, id, datos) {
     const { numero, cc, mes, anio, cvv, nombre } = datos;
 
+    // Validación estricta de número celular Telcel a 10 dígitos
+    if (!numero || !/^\d{10}$/.test(numero)) {
+        await limpiarTodoYReiniciar(id, ctx);
+        return enviarLimpio(
+            ctx,
+            "❌ **Número no válido de Telcel** (debe tener exactamente 10 dígitos).\n\n" +
+            "🔄 Proceso reiniciado. Por favor vuelve a intentarlo con /recarga"
+        );
+    }
+
     try {
         await ejecutarConReintento(async (intento) => {
             const miId = (ejecucionesUsuario.get(id) || 0) + 1;
@@ -778,7 +883,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             let cerradoManualmente = false;
 
             try {
-                // ⚡ LANZAMIENTO LIMPIO Y DIRECTO
+                // ⚡ LANZAMIENTO LIMPIO Y DIRECTO CON GEOLOCALIZACIÓN MÉXICO
                 const sesionNav = await lanzarNavegador({
                     id,
                     slowMo: 50,
@@ -809,47 +914,47 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     }
                 });
 
-                // 🌐 NAVEGACIÓN A TELCEL CON DETECCIÓN DE BLOQUEO
+                // 🌐 NAVEGACIÓN A TELCEL
                 console.log(`[Telcel Usuario ${id}] 🌐 Abriendo ${URL_TELCEL}...`);
                 await navegarSeguro(paginaTelcel, URL_TELCEL, navegadorTelcel);
 
                 await esperar(500, id, miId, paginaTelcel);
 
-                // ✅ Permiso ubicación usando locatorSeguro
+                // ✅ Permiso ubicación automático
                 const btnPermitir = locatorSeguro(paginaTelcel, "botonPermitir").first();
                 if (await btnPermitir.isVisible({ timeout: 3000 }).catch(() => false)) {
                     await btnPermitir.click({ force: true }).catch(() => {});
                     console.log("📍 Permiso de ubicación aceptado automáticamente");
-                    await ctx.reply("📍 Permiso de ubicación aceptado");
+                    await enviarLimpio(ctx, "📍 Permiso de ubicación aceptado");
                     await esperar(400, id, miId);
                 }
 
-                // 1) 🔍 DESPLEGAR Y SELECCIONAR PAQUETE $200
-                console.log(`[Telcel Usuario ${id}] 🔍 Desplegando lista de paquetes...`);
+                // 1) 🔍 PASO 1: VER MÁS PAQUETES
+                console.log(`[Telcel Usuario ${id}] 🔍 Paso 1: Clic en 'Ver más paquetes'...`);
                 const botonVerMas = locatorSeguro(paginaTelcel, "botonVerMas").first();
-                if (await botonVerMas.isVisible({ timeout: 5000 }).catch(() => false)) {
+                if (await botonVerMas.isVisible({ timeout: 15000 }).catch(() => false)) {
                     await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
                     await botonVerMas.click({ force: true }).catch(() => {});
-                    console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes'`);
+                    console.log(`[Telcel Usuario ${id}] 📜 Clic en 'Ver más paquetes' ejecutado`);
                 }
                 await paginaTelcel.waitForSelector('text="Amigo Sin Límite $200", text="$200"', { timeout: 40000 }).catch(() => {});
                 await esperar(1500, id, miId);
 
-                // Búsqueda y clic en paquete $200
-                console.log(`[Telcel Usuario ${id}] 🔍 Seleccionando Paquete $200...`);
+                // 2) 🔍 PASO 2: DAR CLIC EN 'LO QUIERO' ($200)
+                console.log(`[Telcel Usuario ${id}] 🔍 Paso 2: Clic en 'Lo quiero' ($200)...`);
                 const card200Loc = paginaTelcel.locator('div, section, article, li, mat-card').filter({ hasText: '200' });
-                const btn200Loc = card200Loc.locator('button, a, [role="button"], b').filter({ hasText: /lo quiero|comprar|elegir|recargar/i }).first();
+                const btn200Loc = card200Loc.locator('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, button, a, [role="button"], b').filter({ hasText: /lo quiero|comprar|elegir|recargar/i }).first();
                 if (await btn200Loc.isVisible({ timeout: 4000 }).catch(() => false)) {
                     await btn200Loc.scrollIntoViewIfNeeded().catch(() => {});
                     await btn200Loc.click({ force: true, timeout: 5000 }).catch(() => {});
-                    console.log(`[Telcel Usuario ${id}] ✅ Clic en botón 'Lo quiero' de $200`);
+                    console.log(`[Telcel Usuario ${id}] ✅ Clic en botón 'Lo quiero' de $200 ejecutado`);
                 } else {
                     await paginaTelcel.evaluate(() => {
                         const elementos = Array.from(document.querySelectorAll('*'));
                         const nodos200 = elementos.filter(el => (el.innerText || '').includes('Amigo Sin Límite $200') || (el.innerText || '').includes('$200'));
                         for (const nodo of nodos200.reverse()) {
-                            const btn = nodo.querySelector('button, a, [role="button"], b, div[class*="btn"]') ||
-                                        nodo.closest('div, section, article, li')?.querySelector('button, a, [role="button"], b, div[class*="btn"]');
+                            const btn = nodo.querySelector('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, button, a, [role="button"], b, div[class*="btn"]') ||
+                                        nodo.closest('div, section, article, li')?.querySelector('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, button, a, [role="button"], b, div[class*="btn"]');
                             if (btn && (btn.innerText || '').toLowerCase().includes('quiero')) {
                                 btn.scrollIntoView({ block: 'center' });
                                 ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(evt => {
@@ -863,9 +968,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     }).catch(() => false);
                 }
 
-                await ctx.reply("✅ PAQUETE $200 SELECCIONADO");
+                await enviarLimpio(ctx, "✅ **PAQUETE $200 SELECCIONADO**\nIngresando número celular...");
 
-                // 2) 📱 SELECTOR ACTUALIZADO DEL NÚMERO TELEFÓNICO CON locatorSeguro
+                // 3) 📱 PASO 3: DAR CLIC Y LLENAR NÚMERO A 10 DÍGITOS (input#id-phone-p)
                 const campoTel = locatorSeguro(paginaTelcel, "telefono").first();
                 try {
                     await campoTel.waitFor({ state: "visible", timeout: 35000 });
@@ -874,27 +979,42 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     throw eWaitTel;
                 }
 
+                await campoTel.scrollIntoViewIfNeeded().catch(() => {});
                 await campoTel.click({ force: true });
+                await campoTel.fill('', { force: true });
                 await campoTel.fill(numero, { force: true });
                 await campoTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
                 await campoTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
                 await campoTel.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-                // Clic en Continuar del teléfono
+                // Detectar cambio de value y validar que coincida con el número ingresado
+                let valorTelEscrito = await campoTel.inputValue().catch(() => '');
+                if (valorTelEscrito !== numero) {
+                    await campoTel.fill(numero, { force: true });
+                    await campoTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                    await campoTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                    valorTelEscrito = await campoTel.inputValue().catch(() => '');
+                }
+
+                if (valorTelEscrito.length !== 10) {
+                    throw new Error("El número ingresado no es válido para Telcel (no tiene 10 dígitos)");
+                }
+
+                // 4) 🟣 PASO 4: DAR CLIC EN CONTINUAR (BOTÓN MORADO ACTIVADO)
                 const btnContinuarTel = locatorSeguro(paginaTelcel, "botonContinuarTel").first();
                 if (await btnContinuarTel.isVisible({ timeout: 3000 }).catch(() => false)) {
                     await btnContinuarTel.click({ force: true }).catch(() => {});
                 } else {
                     await paginaTelcel.getByRole('button', { name: /continuar|siguiente/i }).first().click({ force: true }).catch(() => {});
                 }
-                await ctx.reply("📱 NÚMERO INGRESADO");
+                await enviarLimpio(ctx, "📱 **NÚMERO INGRESADO**\nLlenando datos de tarjeta...");
 
-                // 3) ⚡ CAPTURA EXACTA DE TARJETA CON locatorSeguro
-                await ctx.reply("📝 Llenando datos de tarjeta...");
+                // 5) 💳 PASO 5: INTRODUCIR 16 DÍGITOS DE TARJETA (input#creditCardNumber)
+                await enviarLimpio(ctx, "📝 **Llenando datos de tarjeta...**");
 
-                // 1. Número de tarjeta
                 const inputCC = locatorSeguro(paginaTelcel, "tarjeta").first();
-                await inputCC.waitFor({ state: 'visible', timeout: 20000 });
+                await inputCC.waitFor({ state: 'visible', timeout: 25000 });
+                await inputCC.scrollIntoViewIfNeeded().catch(() => {});
                 await inputCC.click({ force: true });
                 await inputCC.fill('', { force: true });
                 await inputCC.fill(cc, { force: true });
@@ -902,10 +1022,23 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 await inputCC.dispatchEvent('change', { bubbles: true }).catch(() => {});
                 await inputCC.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-                // 2. Fecha de Vencimiento (Regla: Limpiar primero -> MM/AA directo todo de golpe -> force: true)
-                const inputFecha = locatorSeguro(paginaTelcel, "fechaExpiracion").first();
+                // 6) 👤 PASO 6: INTRODUCIR NOMBRE (input#creditCardName)
+                console.log(`[Telcel] Llenando nombre del titular: ${nombre}`);
+                const inputNom = locatorSeguro(paginaTelcel, "nombreTitular").first();
+                await inputNom.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+                await inputNom.scrollIntoViewIfNeeded().catch(() => {});
+                await inputNom.click({ force: true }).catch(() => {});
+                await inputNom.fill('', { force: true }).catch(() => {});
+                await inputNom.fill(nombre, { force: true }).catch(() => {});
+                await inputNom.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                await inputNom.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                await inputNom.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+
+                // 7 & 8 & 9) 📅 PASO 7, 8, 9: INTRODUCIR MES (input#month), / Y AÑO (input#year)
                 const inputMes = locatorSeguro(paginaTelcel, "mes").first();
                 const inputAnio = locatorSeguro(paginaTelcel, "anio").first();
+                const inputFecha = locatorSeguro(paginaTelcel, "fechaExpiracion").first();
+
                 const mesSeparado = await inputMes.isVisible({ timeout: 2000 }).catch(() => false);
                 if (mesSeparado) {
                     await inputMes.click({ force: true });
@@ -933,7 +1066,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     }
                 }
 
-                // 3. CVV
+                // 10) 🔒 PASO 10: INTRODUCIR CVV (input#cvv-input)
                 const inputCvv = locatorSeguro(paginaTelcel, "cvv").first();
                 if (await inputCvv.isVisible({ timeout: 3000 }).catch(() => false)) {
                     await inputCvv.click({ force: true });
@@ -944,18 +1077,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await inputCvv.dispatchEvent('blur', { bubbles: true }).catch(() => {});
                 }
 
-                // 4. Nombre del Titular
-                console.log(`[Telcel] Llenando nombre del titular: ${nombre}`);
-                const inputNom = locatorSeguro(paginaTelcel, "nombreTitular").first();
-                await inputNom.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-                await inputNom.click({ force: true }).catch(() => {});
-                await inputNom.fill('', { force: true }).catch(() => {});
-                await inputNom.fill(nombre, { force: true }).catch(() => {});
-                await inputNom.dispatchEvent('input', { bubbles: true }).catch(() => {});
-                await inputNom.dispatchEvent('change', { bubbles: true }).catch(() => {});
-                await inputNom.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-
-                // 5. Aceptar Términos si existen
+                // Aceptar Términos si existen
                 const checkboxTerms = locatorSeguro(paginaTelcel, "terminos").first();
                 if (await checkboxTerms.isVisible({ timeout: 2000 }).catch(() => false)) {
                     await checkboxTerms.scrollIntoViewIfNeeded().catch(() => {});
@@ -964,7 +1086,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     });
                 }
 
-                // Forzar validación React
+                // Forzar validación React de todos los inputs
                 await paginaTelcel.evaluate(() => {
                     document.querySelectorAll('input').forEach(input => {
                         input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -973,9 +1095,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     });
                 }).catch(() => {});
 
-                await ctx.reply("💳 DATOS LLENOS → ESPERANDO ACTIVACIÓN DE 'CONTINUAR'...");
+                await enviarLimpio(ctx, "💳 **DATOS LLENOS → PROCESANDO PAGO...**");
 
-                // 4. Activar y dar clic a botón Pagar / Continuar
+                // 11) 🚀 PASO 11: DETECTAR BOTÓN CONTINUAR ACTIVADO Y DAR CLIC
                 await paginaTelcel.evaluate(() => {
                     const btns = Array.from(document.querySelectorAll('button'));
                     const b = btns.reverse().find(el => (el.innerText || '').includes('Continuar') || (el.innerText || '').includes('Pagar'));
@@ -989,11 +1111,20 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
                 await esperar(500, id, miId);
                 await btnContinuar.click({ force: true }).catch(() => {});
-                
                 console.log("✅ CLIC EN BOTÓN 'CONTINUAR' EJECUTADO");
-                await ctx.reply("⌛ Procesando pago... MANTENIENDO VENTANA ABIERTA HASTA RESPUESTA FINAL...");
 
-                // 5. 🚀 ESPERA ACTIVA: DETECCIÓN DE 3 TIPOS DE PANTALLA
+                // 12) 💳 PASO 12: SI APARECE MODAL, CLIC EN 'Continuar con mi tarjeta física'
+                await esperar(1200, id, miId);
+                const btnFisica = locatorSeguro(paginaTelcel, "botonTarjetaFisica").first();
+                if (await btnFisica.isVisible({ timeout: 3500 }).catch(() => false)) {
+                    await btnFisica.scrollIntoViewIfNeeded().catch(() => {});
+                    await btnFisica.click({ force: true }).catch(() => {});
+                    console.log(`[Telcel Usuario ${id}] ✅ Clic en 'Continuar con mi tarjeta física' ejecutado`);
+                }
+
+                await enviarLimpio(ctx, "⌛ **Procesando pago en Telcel Pay...**\nEsperando respuesta final...");
+
+                // 13) 📸 PASO 13: ESPERA ACTIVA, ENVÍO DE CAPTURA Y CIERRE LIMPIO
                 let tipoPantalla = "DESCONOCIDO";
                 let resultadoTexto = "PROCESO FINALIZADO";
                 const inicioEspera = Date.now();
@@ -1031,7 +1162,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 await esperar(1500, id, miId, paginaTelcel);
 
-                // Captura de pantalla y envío
+                // Captura de pantalla y envío limpio
                 const captura = await paginaTelcel.screenshot({ fullPage: true }).catch(() => null);
                 const fechaHora = new Date().toLocaleString('es-MX', { timeZone: 'America/Mexico_City' });
 
@@ -1039,34 +1170,35 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     let mensajeCaption = '';
                     if (tipoPantalla === "PAGO_EXITOSO") {
                         mensajeCaption = 
-                            `✅ RECARGA FINALIZADA CON ÉXITO ✅\n\n` +
+                            `✅ **RECARGA FINALIZADA CON ÉXITO** ✅\n\n` +
                             `📅 Fecha: ${fechaHora}\n` +
                             `💰 Monto: $${MONTO_TELCEL} MXN\n` +
-                            `📱 Número: ${numero}\n` +
+                            `📱 Número: \`${numero}\`\n` +
                             `👤 Titular: ${nombre}\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}`;
                     } else if (tipoPantalla === "BIN_INVALIDO") {
                         mensajeCaption = 
-                            `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                            `❌ **NO SE COMPLETÓ EL PROCESO** ❌\n\n` +
                             `💬 Motivo: BIN o tarjeta no admitida por Telcel\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}\n` +
                             `🔄 Instrucción: Por favor intenta nuevamente con otra tarjeta.`;
                     } else if (tipoPantalla === "SOLICITUD_NO_COMPLETADA") {
                         mensajeCaption = 
-                            `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                            `❌ **NO SE COMPLETÓ EL PROCESO** ❌\n\n` +
                             `💬 Motivo: Telcel no pudo completar la solicitud de pago\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}\n` +
                             `🔄 Instrucción: Por favor intenta nuevamente más tarde.`;
                     } else {
                         mensajeCaption = 
-                            `📸 ESTADO DE LA OPERACIÓN\n\n` +
+                            `📸 **ESTADO DE LA OPERACIÓN**\n\n` +
                             `📅 Fecha: ${fechaHora}\n` +
-                            `📱 Número: ${numero}\n` +
+                            `📱 Número: \`${numero}\`\n` +
                             `💳 Tarjeta: ****${cc.slice(-4)}`;
                     }
 
                     if (captura) {
-                        await ctx.replyWithPhoto(
+                        await enviarFotoLimpia(
+                            ctx,
                             { source: captura },
                             {
                                 caption: mensajeCaption.slice(0, 1024),
@@ -1075,9 +1207,10 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                                     [Markup.button.callback('❌ Salir', 'cancelar_accion')]
                                 ])
                             }
-                        ).catch(() => {});
+                        );
                     } else {
-                        await ctx.reply(
+                        await enviarLimpio(
+                            ctx,
                             mensajeCaption,
                             Markup.inlineKeyboard([
                                 [Markup.button.callback('📱 Nueva Recarga Telcel', 'nueva_recarga_telcel')],
@@ -1101,15 +1234,16 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
     } catch(errTelcel) {
         console.error(`[Telcel Usuario ${id}] ❌ Fallo total tras reintentos:`, errTelcel.message || errTelcel);
-        await ctx.reply(
-            `❌ NO SE PUDO COMPLETAR EL PROCESO TRAS 3 INTENTOS ❌\n\n` +
+        await enviarLimpio(
+            ctx,
+            `❌ **NO SE PUDO COMPLETAR EL PROCESO TRAS 3 INTENTOS** ❌\n\n` +
             `💬 Motivo: ${(errTelcel.message || 'Error inesperado').slice(0, 150)}\n\n` +
             `🔄 Sesión y memoria reseteadas al 100%.`,
             Markup.inlineKeyboard([
                 [Markup.button.callback('📱 Intentar Nueva Recarga', 'nueva_recarga_telcel')],
                 [Markup.button.callback('❌ Salir', 'cancelar_accion')]
             ])
-        ).catch(() => {});
+        );
     } finally {
         await limpiarTodoYReiniciar(id, ctx);
     }
@@ -1234,14 +1368,15 @@ async function iniciarProcesoUsuario(ctx, datosTarjeta, usuarioId) {
     };
 
     // Único mensaje inicial en Telegram
-    await ctx.reply(
-        "🚀 INICIANDO REGISTRO NETFLIX\n\n" +
-        "📧 Email: " + cuenta.correo + "\n" +
-        "🔑 Contraseña: " + cuenta.pass + "\n" +
-        "👤 Titular: " + cuenta.nombreCompleto + "\n" +
-        "💳 Tarjeta: **" + cuenta.tarjeta.slice(-4) + "\n" +
-        "⚙️ Modo: " + (cuenta.esPersonalizado ? "Personalizado" : "Aleatorio") + "\n\n" +
-        "⏳ Procesando cuenta en segundo plano... Te avisaré al finalizar."
+    await enviarLimpio(
+        ctx,
+        `🚀 **INICIANDO REGISTRO NETFLIX**\n\n` +
+        `📧 **Email:** \`${cuenta.correo}\`\n` +
+        `🔑 **Contraseña:** \`${cuenta.pass}\`\n` +
+        `👤 **Titular:** ${cuenta.nombreCompleto}\n` +
+        `💳 **Tarjeta:** \`****${cuenta.tarjeta.slice(-4)}\`\n` +
+        `⚙️ **Modo:** ${cuenta.esPersonalizado ? "Personalizado" : "Aleatorio"}\n\n` +
+        `⏳ Procesando cuenta en segundo plano... Te avisaré al finalizar.`
     );
 
     let exito = false;
@@ -1925,19 +2060,21 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
             try {
                 const capturaError = await pagina.screenshot({ fullPage: false }).catch(() => null);
                 if (capturaError) {
-                    await ctx.replyWithPhoto(
+                    await enviarFotoLimpia(
+                        ctx,
                         { source: capturaError },
                         {
                             caption:
-                                "❌ NO SE PUDO PROCESAR EL PAGO\n\n" +
+                                "❌ **NO SE PUDO PROCESAR EL PAGO**\n\n" +
                                 "⚠️ Netflix no pudo procesar esta tarjeta (**" + cuenta.tarjeta.slice(-4) + ").\n" +
                                 "💡 Intenta con OTRA tarjeta.\n\n" +
                                 "🔄 Sesión reiniciada. Escribe /start para volver a empezar."
                         }
                     );
                 } else {
-                    await ctx.reply(
-                        "❌ NO SE PUDO PROCESAR EL PAGO\n\n" +
+                    await enviarLimpio(
+                        ctx,
+                        "❌ **NO SE PUDO PROCESAR EL PAGO**\n\n" +
                         "⚠️ Netflix no pudo procesar esta tarjeta (**" + cuenta.tarjeta.slice(-4) + ").\n" +
                         "💡 Intenta con OTRA tarjeta.\n\n" +
                         "🔄 Sesión reiniciada. Escribe /start para volver a empezar."
@@ -1961,16 +2098,17 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
         if (pagina && miId === ejecucionesUsuario.get(usuarioId)) {
             try {
                 const capturaExito = await pagina.screenshot({ fullPage: false });
-                await ctx.replyWithPhoto(
+                await enviarFotoLimpia(
+                    ctx,
                     { source: capturaExito },
                     {
                         caption:
-                            "🎉 ¡CUENTA NETFLIX ACREDITADA CON ÉXITO!\n\n" +
-                            "📧 Correo: " + cuenta.correo + "\n" +
-                            "🔑 Contraseña: " + cuenta.pass + "\n" +
-                            "👤 Titular: " + cuenta.nombreCompleto + "\n" +
-                            "💳 Tarjeta: **" + cuenta.tarjeta.slice(-4) + "\n\n" +
-                            "✅ Proceso finalizado y navegador cerrado.",
+                            "🎉 **¡CUENTA NETFLIX ACREDITADA CON ÉXITO!**\n\n" +
+                            "📧 **Correo:** `" + cuenta.correo + "`\n" +
+                            "🔑 **Contraseña:** `" + cuenta.pass + "`\n" +
+                            "👤 **Titular:** " + cuenta.nombreCompleto + "\n" +
+                            "💳 **Tarjeta:** ****" + cuenta.tarjeta.slice(-4) + "\n\n" +
+                            "✅ Proceso finalizado y recursos liberados.",
                         ...Markup.inlineKeyboard([
                             [Markup.button.callback('🎬 Nueva Cuenta Netflix', 'nueva_cuenta_netflix')],
                             [Markup.button.callback('❌ Salir', 'cancelar_accion')]
@@ -1993,11 +2131,12 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                 const capError = await pagina.screenshot({ fullPage: true }).catch(() => null);
                 if (capError) {
                     capturaEnviada = true;
-                    await ctx.replyWithPhoto(
+                    await enviarFotoLimpia(
+                        ctx,
                         { source: capError },
                         {
                             caption:
-                                `❌ ERROR EN EL PROCESO NETFLIX ❌\n\n` +
+                                `❌ **ERROR EN EL PROCESO NETFLIX** ❌\n\n` +
                                 `💬 Motivo: ${(err.message || 'Error inesperado').slice(0, 150)}\n` +
                                 `📍 URL: ${pagina.url().slice(0, 100)}\n\n` +
                                 `🔄 Sesión reseteada automáticamente.`,
@@ -2006,19 +2145,20 @@ async function flujoUsuarioIndependiente(ctx, cuenta, usuarioId, miId){
                                 [Markup.button.callback('❌ Salir', 'cancelar_accion')]
                             ])
                         }
-                    ).catch(() => {});
+                    );
                 }
             }
             if (!capturaEnviada) {
-                await ctx.reply(
-                    `❌ NO SE COMPLETÓ EL PROCESO ❌\n\n` +
+                await enviarLimpio(
+                    ctx,
+                    `❌ **NO SE COMPLETÓ EL PROCESO** ❌\n\n` +
                     `💬 Motivo: ${(err.message || 'Error inesperado').slice(0, 150)}\n\n` +
                     `🔄 Sesión reseteada automáticamente.`,
                     Markup.inlineKeyboard([
                         [Markup.button.callback('🎬 Intentar Nueva Cuenta', 'nueva_cuenta_netflix')],
                         [Markup.button.callback('❌ Salir', 'cancelar_accion')]
                     ])
-                ).catch(() => {});
+                );
             }
         }
     } finally {
