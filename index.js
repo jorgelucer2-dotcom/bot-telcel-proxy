@@ -17,7 +17,7 @@ if (!BOT_TOKEN) {
 }
 const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
 const URL_NETFLIX = process.env.URL_NETFLIX || 'https://www.netflix.com/mx/';
-const MONTO_TELCEL = 200;
+const MONTO_TELCEL_DEFAULT = 200; // Valor por defecto en caso de no especificarse
 const TIEMPO_MAX_COMANDO = 120000; // 2 minutos límite por proceso para evitar bloqueos
 const MAX_USUARIOS = 2; // 🎯 Límite de 2 procesos simultáneos para evitar saturación de memoria
 
@@ -893,8 +893,8 @@ bot.action('nueva_cuenta_netflix', async ctx => {
 function locatorSeguro(pagina, clave) {
     const mapaSelectores = {
         botonPermitir: 'button:has-text("Permitir mientras visito el sitio"), button:has-text("Permitir ubicación"), button:has-text("Permitir"), button:has-text("Aceptar"), button:has-text("Acepto"), button:has-text("Entendido")',
-        // Paso 1: Ver más paquetes
-        botonVerMas: 'button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes"), button.border-fuchsia-800, div[role="button"]:has-text("Ver más paquetes"), svg[viewBox="0 0 24 24"]',
+        // Paso 1: Ver más paquetes (Button específico que contiene el texto "Ver más paquetes")
+        botonVerMas: 'button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")',
         // Paso 2: Lo quiero de $200
         paquete200: 'text="Amigo Sin Límite $200", text="$200"',
         botonLoQuiero200: 'b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, b:has-text("Lo quiero"), div:has-text("Amigo Sin Límite $200") b:has-text("Lo quiero"), div:has-text("$200") b:has-text("Lo quiero"), button:has-text("Lo quiero")',
@@ -951,6 +951,109 @@ async function ejecutarConReintento(fn, intentosMax = 3, id, ctx) {
         }
     }
     throw ultimoError;
+}
+
+// --------------------------------------------------
+// 📦 FUNCIONES MODULARES DE NAVEGACIÓN DE PAQUETES
+// --------------------------------------------------
+
+/**
+ * Localiza y pulsa el botón "Ver más paquetes" asegurando que la tarjeta del monto solicitado esté disponible.
+ * @param {import('playwright').Page} pagina
+ * @param {number|string} monto
+ */
+async function abrirMasPaquetes(pagina, monto) {
+    // 1. Localizar específicamente el BUTTON que contiene "Ver más paquetes"
+    const botonVerMas = pagina.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")');
+
+    // 2 & 3. Esperar attached y visible
+    await botonVerMas.waitFor({ state: 'attached', timeout: 12000 });
+    await botonVerMas.scrollIntoViewIfNeeded();
+    await botonVerMas.waitFor({ state: 'visible', timeout: 5000 });
+
+    // 4. Comprobar enabled
+    const visible = await botonVerMas.isVisible().catch(() => false);
+    const enabled = visible ? await botonVerMas.isEnabled().catch(() => false) : false;
+
+    if (!visible || !enabled) {
+        console.error('[PAQUETES] ERROR: BOTÓN VER MÁS PAQUETES NO ENCONTRADO');
+        throw new Error('BOTON_VER_MAS_PAQUETES_NO_ENCONTRADO');
+    }
+
+    console.log('[PAQUETES] Botón "Ver más paquetes" encontrado.');
+    console.log(`[PAQUETES] Botón visible: ${visible ? 'SI' : 'NO'}`);
+    console.log(`[PAQUETES] Botón habilitado: ${enabled ? 'SI' : 'NO'}`);
+
+    // 5. Clic normal de Playwright
+    await botonVerMas.click();
+    console.log('[PAQUETES] Click en "Ver más paquetes" realizado.');
+    console.log(`[PAQUETES] Esperando disponibilidad real de la tarjeta $${monto}...`);
+
+    // 6. Esperar mediante Playwright a que aparezca REALMENTE la tarjeta correspondiente al monto solicitado ($200 / $300 / $500)
+    const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
+    const tarjetaEsperada = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
+        .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
+        .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
+
+    await tarjetaEsperada.waitFor({ state: 'attached', timeout: 15000 });
+    console.log(`[PAQUETES] Tarjeta $${monto} confirmada en el DOM.`);
+}
+
+/**
+ * Localiza la tarjeta individual correspondiente al monto y pulsa su botón "Lo quiero".
+ * @param {import('playwright').Page} pagina
+ * @param {number|string} monto
+ */
+async function seleccionarPaquete(pagina, monto) {
+    console.log(`[PAQUETES] Monto solicitado: $${monto}`);
+    console.log('[PAQUETES] Buscando tarjeta correspondiente...');
+
+    // Criterio exacto de costo en la tarjeta ($200, $300 o $500)
+    const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
+
+    // Localizar tarjeta individual real de la página
+    const tarjeta = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
+        .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
+        .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
+
+    await tarjeta.waitFor({ state: 'attached', timeout: 12000 });
+
+    const conteo = await tarjeta.count().catch(() => 0);
+
+    if (conteo === 0) {
+        console.error(`[PAQUETES] ERROR: PAQUETE $${monto} NO ENCONTRADO`);
+        throw new Error(`PAQUETE_$${monto}_NO_ENCONTRADO`);
+    }
+
+    if (conteo > 1) {
+        console.error('[PAQUETES] Múltiples coincidencias encontradas');
+        throw new Error(`MULTIPLES_PAQUETES_COINCIDENTES_$${monto}`);
+    }
+
+    console.log(`[PAQUETES] Tarjeta $${monto} encontrada.`);
+    console.log('[PAQUETES] Buscando "Lo quiero" dentro de la tarjeta.');
+
+    // Dentro de ESA MISMA tarjeta encontrar exclusivamente su botón "Lo quiero"
+    const botonLoQuiero = tarjeta.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")');
+
+    await botonLoQuiero.waitFor({ state: 'attached', timeout: 8000 });
+    await botonLoQuiero.scrollIntoViewIfNeeded();
+
+    const visible = await botonLoQuiero.isVisible({ timeout: 4000 }).catch(() => false);
+    const enabled = visible ? await botonLoQuiero.isEnabled().catch(() => false) : false;
+
+    console.log('[PAQUETES] Botón encontrado.');
+    console.log(`[PAQUETES] Botón visible: ${visible ? 'SI' : 'NO'}`);
+    console.log(`[PAQUETES] Botón habilitado: ${enabled ? 'SI' : 'NO'}`);
+
+    if (!visible || !enabled) {
+        console.error(`[PAQUETES] ERROR: PAQUETE $${monto} NO ENCONTRADO`);
+        throw new Error(`BOTON_LO_QUIERO_$${monto}_NO_DISPONIBLE`);
+    }
+
+    // Clic normal de Playwright
+    await botonLoQuiero.click();
+    console.log(`[PAQUETES] Paquete $${monto} seleccionado.`);
 }
 
 async function flujoTelcelIndependiente(ctx, id, datos) {
@@ -1033,116 +1136,18 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await btnPermitir.click({ force: true }).catch(() => {});
                     console.log("[Telcel] 📍 Permiso de ubicación aceptado");
                     await esperar(400, id, miId);
+                } else {
+                    console.log("[Telcel] 📍 Permiso de ubicación no requerido / no apareció");
                 }
 
-                // 1 & 2) 🔍 PASO PREVIO OBLIGATORIO: VER MÁS PAQUETES
+                // 1 & 2) 🔍 PASO PREVIO OBLIGATORIO: VER MÁS PAQUETES Y SELECCIÓN DE PAQUETE
+                etapaActual = "Apertura de paquetes adicionales";
+                await abrirMasPaquetes(paginaTelcel, monto);
+
                 etapaActual = `Selección de paquete $${monto}`;
+                await seleccionarPaquete(paginaTelcel, monto);
+
                 const inputNumero = 'input#id-phone-p';
-
-                console.log(`[Telcel Usuario ${id}] 🔍 Paso 1: Localizando botón 'Ver más paquetes'...`);
-                console.log('[PAQUETES] Abriendo paquetes adicionales...');
-
-                // 1 & 2. Localizar y verificar visibilidad del botón "Ver más paquetes"
-                const botonVerMas = paginaTelcel.locator('button, div[role="button"], a, p').filter({ hasText: /ver m[áa]s paquetes/i }).first();
-                let botonVerMasVisible = await botonVerMas.isVisible({ timeout: 5000 }).catch(() => false);
-
-                if (!botonVerMasVisible) {
-                    botonVerMasVisible = await paginaTelcel.evaluate(() => {
-                        const btns = Array.from(document.querySelectorAll('button, div[role="button"], a, p'));
-                        return btns.some(b => (b.innerText || '').toLowerCase().includes('ver más paquetes'));
-                    }).catch(() => false);
-                }
-
-                if (!botonVerMasVisible) {
-                    console.error('[PAQUETES] ERROR: BOTÓN VER MÁS PAQUETES NO ENCONTRADO');
-                    throw new Error('BOTON_VER_MAS_PAQUETES_NO_ENCONTRADO');
-                }
-
-                // 3. Hacer click sobre "Ver más paquetes" usando API de Playwright
-                await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
-                await botonVerMas.click().catch(async () => {
-                    await paginaTelcel.evaluate(() => {
-                        const btns = Array.from(document.querySelectorAll('button, div[role="button"], a, p'));
-                        const btn = btns.find(b => (b.innerText || '').toLowerCase().includes('ver más paquetes'));
-                        if (btn) {
-                            const target = btn.closest('button, div[role="button"]') || btn;
-                            target.scrollIntoView({ block: 'center' });
-                            if (typeof target.click === 'function') target.click();
-                        }
-                    }).catch(() => {});
-                });
-
-                // 4 & 5. Esperar a que los paquetes adicionales estén realmente cargados y volver a inspeccionar
-                await paginaTelcel.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-                await esperar(2500, id, miId, paginaTelcel);
-                console.log('[PAQUETES] Paquetes adicionales cargados.');
-
-                // 6. Identificar las tarjetas INDIVIDUALES de los paquetes
-                const tarjetasInfo = await paginaTelcel.evaluate(() => {
-                    // Encontrar todos los botones de acción "Lo quiero" en la página
-                    const btns = Array.from(document.querySelectorAll('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, .Plan_buttonPackageContainer__dOIw6, b, button'))
-                        .filter(el => (el.innerText || '').trim().toLowerCase() === 'lo quiero');
-
-                    const lista = [];
-                    const tarjetasIdentificadas = new Set();
-
-                    for (const btn of btns) {
-                        // Subir al contenedor específico de la tarjeta que agrupa monto, info y botón
-                        let contenedor = btn.closest('[class*="Plan_buttonPackageContainer"]')?.parentElement || btn.parentElement;
-                        while (contenedor && contenedor !== document.body) {
-                            const texto = (contenedor.innerText || '').replace(/\s+/g, ' ').trim();
-                            // El contenedor de la tarjeta individual debe contener el precio y su botón
-                            if (texto.includes('$') || /\b(50|100|150|200|300|500)\b/.test(texto)) {
-                                break;
-                            }
-                            contenedor = contenedor.parentElement;
-                        }
-
-                        if (contenedor && !tarjetasIdentificadas.has(contenedor)) {
-                            tarjetasIdentificadas.add(contenedor);
-                            const idIndex = lista.length;
-                            contenedor.setAttribute('data-telcel-card-id', String(idIndex));
-                            const textoLimpio = (contenedor.innerText || '').replace(/\s+/g, ' ').trim();
-                            lista.push({ idIndex, texto: textoLimpio });
-                        }
-                    }
-                    return lista;
-                });
-
-                console.log(`[PAQUETES] Buscando monto solicitado: $${monto}`);
-
-                // 7. Buscar dentro de la tarjeta correspondiente EXACTAMENTE el monto solicitado ($200, $300 o $500)
-                // Criterio estricto: $200 no debe coincidir con $2000, $1200, $20000; $300 no con $3000; $500 no con $5000.
-                const regexExacto = new RegExp(`(?:^|[^0-9])\\$?\\s*${monto}(?:[^0-9]|$)`, 'i');
-                const tarjetaEncontrada = tarjetasInfo.find(t => regexExacto.test(t.texto));
-
-                if (!tarjetaEncontrada) {
-                    console.log(`[PAQUETE $${monto}] Encontrado: NO`);
-                    console.error(`[PAQUETE $${monto}] ERROR: NO ENCONTRADO`);
-                    throw new Error(`PAQUETE_$${monto}_NO_ENCONTRADO`);
-                }
-
-                console.log(`[PAQUETE $${monto}] Encontrado: SI`);
-
-                // 8. Localizar el botón "Lo quiero" QUE PERTENEZCA A ESA MISMA TARJETA
-                const tarjetaLoc = paginaTelcel.locator(`[data-telcel-card-id="${tarjetaEncontrada.idIndex}"]`);
-                const btnLoQuiero = tarjetaLoc.locator('b.Plan_buttonPackageLabel__xB_jv, .Plan_buttonPackage__SY6E2, b:has-text("Lo quiero"), button:has-text("Lo quiero"), [role="button"]:has-text("Lo quiero")').first();
-
-                await btnLoQuiero.waitFor({ state: 'visible', timeout: 8000 });
-                await btnLoQuiero.scrollIntoViewIfNeeded();
-
-                console.log(`[PAQUETE $${monto}] Botón "Lo quiero": ENCONTRADO`);
-
-                // 9. Clic usando la API normal de Playwright sobre el botón encontrado
-                await btnLoQuiero.click();
-
-                console.log(`[PAQUETE $${monto}] Seleccionado correctamente`);
-
-                // 3) ⏳ BLOQUE DE ESPERA TRAS DAR CLIC EN 'LO QUIERO'
-                etapaActual = "Ingreso de número celular";
-                console.log(`[Telcel Usuario ${id}] ⏳ Esperando carga y campo de teléfono (${inputNumero})...`);
-                await paginaTelcel.waitForSelector('h2:has-text("Número celular"), div:has-text("Número celular")', { state: 'visible', timeout: 18000 }).catch(() => {});
-                await paginaTelcel.locator(inputNumero).waitFor({ state: 'visible', timeout: 18000 });
 
                 // 4) 📱 VALIDACIÓN ANTES DE LLENAR EL NÚMERO (EDITABLE Y HABILITADO)
                 if (!(await paginaTelcel.locator(inputNumero).isEditable().catch(() => false))) {
@@ -1318,10 +1323,11 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await esperar(300, id, miId, paginaTelcel);
                 }
 
-                console.log(`[CONTINUAR] Encontrado: ${encontradoContinuar ? 'SI' : 'NO'}`);
+                if (encontradoContinuar) {
+                    console.log("[CONTINUAR] Botón encontrado.");
+                }
                 console.log(`[CONTINUAR] Visible: ${visibleContinuar ? 'SI' : 'NO'}`);
                 console.log(`[CONTINUAR] Enabled: ${enabledContinuar ? 'SI' : 'NO'}`);
-                console.log(`[CONTINUAR] Disabled: ${disabledContinuar ? 'SI' : 'NO'}`);
 
                 if (!enabledContinuar) {
                     throw new Error("BOTON_CONTINUAR_NO_HABILITADO");
@@ -1330,7 +1336,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 // Clic natural cuando la página lo habilitó (sin force)
                 await btnContinuar.scrollIntoViewIfNeeded().catch(() => {});
                 await btnContinuar.click();
-                console.log("[Telcel] ✅ Clic en botón 'Continuar' ejecutado");
+                console.log("[CONTINUAR] Click realizado.");
 
                 // Esperar transición real de la página después del clic
                 await paginaTelcel.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
@@ -1344,7 +1350,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 const visibleModal = encontradoModal ? await btnFisica.isVisible({ timeout: 2000 }).catch(() => false) : false;
                 const enabledModal = visibleModal ? await btnFisica.isEnabled().catch(() => false) : false;
 
-                console.log(`[MODAL] "Continuar con mi tarjeta física" encontrado: ${encontradoModal ? 'SI' : 'NO'}`);
+                if (encontradoModal) {
+                    console.log('[MODAL] "Continuar con mi tarjeta física" encontrado.');
+                }
                 console.log(`[MODAL] Visible: ${visibleModal ? 'SI' : 'NO'}`);
                 console.log(`[MODAL] Enabled: ${enabledModal ? 'SI' : 'NO'}`);
 
@@ -2710,4 +2718,5 @@ if (ES_MODO_PRUEBA_IP) {
 }
 
 module.exports = { testConexionNavegador, testDiagnosticoRed };
+
 
