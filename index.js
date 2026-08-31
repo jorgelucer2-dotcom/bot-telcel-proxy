@@ -767,9 +767,22 @@ const validarBait = async (pag, monto) => {
 
 const aceptarCookiesBait = async pag => {
     try {
-        const btn = pag.locator('#onetrust-accept-btn-handler, button:has-text("Aceptar"), button:has-text("Permitir todas")').first();
-        if (await btn.isVisible({ timeout: 2500 }).catch(() => false)) {
-            await btn.click({ timeout: 2500 }).catch(() => {});
+        const selectoresCierre = [
+            '#ph71-close',
+            'button:has-text("✕")',
+            'button:has-text("close")',
+            '#onetrust-accept-btn-handler',
+            'button:has-text("Aceptar")',
+            'button:has-text("Permitir todas")',
+            'button:has-text("Acepto")'
+        ];
+        for (const s of selectoresCierre) {
+            try {
+                const btn = pag.locator(s).first();
+                if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+                    await btn.click({ timeout: 1000 }).catch(() => {});
+                }
+            } catch(e) {}
         }
     } catch {}
 };
@@ -778,6 +791,7 @@ const aceptarCookiesBait = async pag => {
 async function buscarInputBait(pag, selectores, timeout = 30000) {
     const inicio = Date.now();
     while (Date.now() - inicio < timeout) {
+        await aceptarCookiesBait(pag).catch(() => {});
         for (const sel of selectores) {
             try {
                 const loc = pag.locator(sel).first();
@@ -824,11 +838,17 @@ async function flujoBait(ctx, id, datos) {
             await pag.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
             await aceptarCookiesBait(pag);
 
-            // 📱 Ingresar número con búsqueda resiliente
+            // 📱 Ingresar número con búsqueda resiliente (incluyendo IDs reales de mibait.com)
             const selectoresTel = [
-                'input[type="tel"]',
+                'input#telefono_contacto',
+                'input#telefono_esim',
+                'input#telefono_sim',
                 'input#msisdn',
+                'input#phone',
+                'input[type="tel"]',
                 'input[name="msisdn"]',
+                'input[placeholder*="10 Dígitos" i]',
+                'input[placeholder*="10 dígitos" i]',
                 'input[placeholder*="número" i]',
                 'input[placeholder*="numero" i]',
                 'input[placeholder*="celular" i]',
@@ -845,7 +865,9 @@ async function flujoBait(ctx, id, datos) {
             await campoTel.locator.fill(numero, { force: true });
 
             const selectoresBtnRecargar = [
+                'button:has-text("Proceder al pago")',
                 'button:has-text("Recargar")',
+                'button:has-text("Buscar Recargas")',
                 'button[type="submit"]:has-text("Recargar")',
                 'button:has-text("Continuar")',
                 'button:has-text("Siguiente")',
@@ -1254,12 +1276,25 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
         }
     }, INTERVALO_PING_MS);
 
-    bot.launch({
-        dropPendingUpdates: true,
-        polling: true,
-        timeout: 25000
-    })
-    .then(() => console.log("🤖 LISTO: TELCEL + BAIT CONECTADO EXITOSAMENTE"))
-    .catch(err => console.error("❌ ERROR BOT:", err.message || err));
+    async function iniciarTelegramBot() {
+        try {
+            await bot.launch({
+                dropPendingUpdates: true,
+                polling: {
+                    timeout: 20,
+                    limit: 100,
+                    autoStart: true
+                }
+            });
+            console.log("🤖 LISTO: TELCEL + BAIT CONECTADO EXITOSAMENTE");
+        } catch (err) {
+            if (err.message && (err.message.includes('409') || err.message.includes('Conflict'))) {
+                console.log("⚠️ Conflicto 409 detectado (otra instancia activa cerrándose). Reintentando en 6s...");
+                setTimeout(iniciarTelegramBot, 6000);
+            } else {
+                console.error("❌ ERROR BOT:", err.message || err);
+            }
+        }
+    }
+    iniciarTelegramBot();
 });
-
