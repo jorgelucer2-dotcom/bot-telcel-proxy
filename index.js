@@ -774,6 +774,44 @@ const aceptarCookiesBait = async pag => {
     } catch {}
 };
 
+// Helper resiliente de búsqueda en página principal e iframes para Bait
+async function buscarInputBait(pag, selectores, timeout = 30000) {
+    const inicio = Date.now();
+    while (Date.now() - inicio < timeout) {
+        for (const sel of selectores) {
+            try {
+                const loc = pag.locator(sel).first();
+                if (await loc.isVisible({ timeout: 300 }).catch(() => false)) {
+                    return { locator: loc, frame: null };
+                }
+            } catch (e) {}
+        }
+        for (const frame of pag.frames()) {
+            for (const sel of selectores) {
+                try {
+                    const loc = frame.locator(sel).first();
+                    if (await loc.isVisible({ timeout: 300 }).catch(() => false)) {
+                        return { locator: loc, frame };
+                    }
+                } catch (e) {}
+            }
+        }
+        await new Promise(r => setTimeout(r, 400));
+    }
+    return null;
+}
+
+async function llenarInputBait(pag, selectores, valor, timeout = 20000) {
+    const el = await buscarInputBait(pag, selectores, timeout);
+    if (el && el.locator) {
+        await el.locator.scrollIntoViewIfNeeded().catch(() => {});
+        await el.locator.click({ force: true }).catch(() => {});
+        await el.locator.fill(valor, { force: true }).catch(() => {});
+        return true;
+    }
+    return false;
+}
+
 async function flujoBait(ctx, id, datos) {
     const { numero, tarjeta, mes, anio, cvv, monto } = datos;
     await ctx.reply(`🔄 BAIT (mibait.com) $${monto}...`);
@@ -782,17 +820,41 @@ async function flujoBait(ctx, id, datos) {
         intento++;
         try {
             const pag = await lanzarMxBait(id);
-            await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 25000 });
-            await pag.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+            await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 35000 });
+            await pag.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
             await aceptarCookiesBait(pag);
 
-            const inputTel = pag.locator('input[type="tel"], input#msisdn, input[name="msisdn"]').first();
-            await inputTel.waitFor({ state: 'visible', timeout: 15000 });
-            await inputTel.fill(numero);
+            // 📱 Ingresar número con búsqueda resiliente
+            const selectoresTel = [
+                'input[type="tel"]',
+                'input#msisdn',
+                'input[name="msisdn"]',
+                'input[placeholder*="número" i]',
+                'input[placeholder*="numero" i]',
+                'input[placeholder*="celular" i]',
+                'input[placeholder*="teléfono" i]',
+                'input[name*="phone" i]',
+                'input[maxlength="10"]'
+            ];
+            const campoTel = await buscarInputBait(pag, selectoresTel, 30000);
+            if (!campoTel) {
+                throw new Error("No se localizó el campo de número celular en Bait");
+            }
+            await campoTel.locator.scrollIntoViewIfNeeded().catch(() => {});
+            await campoTel.locator.click({ force: true });
+            await campoTel.locator.fill(numero, { force: true });
 
-            const btnRecargar = pag.locator('button:has-text("Recargar"), button[type="submit"]:has-text("Recargar")').first();
-            await btnRecargar.waitFor({ state: 'visible', timeout: 15000 });
-            await btnRecargar.click();
+            const selectoresBtnRecargar = [
+                'button:has-text("Recargar")',
+                'button[type="submit"]:has-text("Recargar")',
+                'button:has-text("Continuar")',
+                'button:has-text("Siguiente")',
+                'button[type="submit"]'
+            ];
+            const btnRecargar = await buscarInputBait(pag, selectoresBtnRecargar, 15000);
+            if (btnRecargar) {
+                await btnRecargar.locator.click({ force: true });
+            }
 
             await pag.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
 
@@ -811,44 +873,15 @@ async function flujoBait(ctx, id, datos) {
             await ctx.reply('✅ BAIT: PAYPAL + MÉXICO ENCONTRADO 🇲🇽');
             const nom = genBait.nombre(), ape = genBait.apellido(), cp = genBait.cp(), cel = genBait.celular(), corr = genBait.correo();
 
-            const inputCard = pag.locator('input[name="cardNumber"], input#cardNumber, input[placeholder*="tarjeta" i]').first();
-            await inputCard.waitFor({ state: 'visible', timeout: 15000 });
-            await inputCard.fill(tarjeta);
-
-            const inputExp = pag.locator('input[placeholder="Fecha de vencimiento"], input[name="cardExpiry"], input#cardExpiry').first();
-            if (await inputExp.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputExp.fill(`${mes}/${anio.slice(-2)}`);
-            }
-
-            const inputCsc = pag.locator('input[placeholder="CSC"], input[name="cardCvv"], input#cardCvv, input[placeholder*="CVV" i]').first();
-            if (await inputCsc.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputCsc.fill(cvv);
-            }
-
-            const inputNom = pag.locator('input[placeholder="Nombre"], input[name="firstName"]').first();
-            if (await inputNom.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputNom.fill(nom);
-            }
-
-            const inputApe = pag.locator('input[placeholder="Apellidos"], input[name="lastName"]').first();
-            if (await inputApe.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputApe.fill(ape);
-            }
-
-            const inputCp = pag.locator('input[placeholder="Código postal"], input[name="postalCode"]').first();
-            if (await inputCp.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputCp.fill(cp);
-            }
-
-            const inputCel = pag.locator('input[placeholder="Celular"], input[name="phoneNumber"]').first();
-            if (await inputCel.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputCel.fill(cel);
-            }
-
-            const inputMail = pag.locator('input[placeholder="Correo electrónico"], input[name="email"]').first();
-            if (await inputMail.isVisible({ timeout: 2000 }).catch(() => false)) {
-                await inputMail.fill(corr);
-            }
+            // 📝 Llenado de tarjeta e inputs PayPal (directo e iframes)
+            await llenarInputBait(pag, ['input[name="cardNumber"]', 'input#cardNumber', 'input[placeholder*="tarjeta" i]', 'input[autocomplete="cc-number"]'], tarjeta, 25000);
+            await llenarInputBait(pag, ['input[placeholder*="vencimiento" i]', 'input[placeholder*="MM" i]', 'input[name="cardExpiry"]', 'input#cardExpiry'], `${mes}/${anio.slice(-2)}`, 10000);
+            await llenarInputBait(pag, ['input[placeholder="CSC"]', 'input[placeholder*="CVV" i]', 'input[placeholder*="CVC" i]', 'input[name="cardCvv"]', 'input#cardCvv'], cvv, 10000);
+            await llenarInputBait(pag, ['input[placeholder="Nombre"]', 'input[name="firstName"]'], nom, 10000);
+            await llenarInputBait(pag, ['input[placeholder="Apellidos"]', 'input[name="lastName"]'], ape, 10000);
+            await llenarInputBait(pag, ['input[placeholder="Código postal"]', 'input[name="postalCode"]'], cp, 10000);
+            await llenarInputBait(pag, ['input[placeholder="Celular"]', 'input[name="phoneNumber"]'], cel, 10000);
+            await llenarInputBait(pag, ['input[placeholder="Correo electrónico"]', 'input[name="email"]'], corr, 10000);
 
             const check = pag.locator('input[type="checkbox"]').filter({ hasText: /Confirmo que soy mayor/i }).first();
             if (await check.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -857,9 +890,17 @@ async function flujoBait(ctx, id, datos) {
                 }
             }
 
-            const btnPagar = pag.locator(`button:has-text("Pagar $${monto}.00 MXN"), button:has-text("Pagar $${monto}"), button:has-text("Pagar")`).first();
-            await btnPagar.waitFor({ state: 'visible', timeout: 15000 });
-            await btnPagar.click({ timeout: 15000 });
+            const selectoresBtnPagar = [
+                `button:has-text("Pagar $${monto}.00 MXN")`,
+                `button:has-text("Pagar $${monto}")`,
+                'button:has-text("Pagar")',
+                'button:has-text("Realizar pago")',
+                'button[type="submit"]:has-text("Pagar")'
+            ];
+            const btnPagar = await buscarInputBait(pag, selectoresBtnPagar, 20000);
+            if (btnPagar) {
+                await btnPagar.locator.click({ force: true });
+            }
 
             await pag.waitForLoadState('networkidle', { timeout: 45000 }).catch(() => {});
             const foto = await pag.screenshot({ fullPage: true }).catch(() => null);
@@ -876,8 +917,8 @@ async function flujoBait(ctx, id, datos) {
             return;
 
         } catch (e) {
-            console.log(`[Bait] ⚠️ Intento ${intento}: ${e.message.slice(0, 50)}`);
-            await ctx.reply(`⚠️ BAIT Intento ${intento} falló → Reintentando...`);
+            console.log(`[Bait] ⚠️ Intento ${intento}: ${e.message.slice(0, 60)}`);
+            await ctx.reply(`⚠️ BAIT Intento ${intento} falló (${e.message.slice(0, 45)}) → Reintentando...`);
             await cerrarBait(id);
             await new Promise(r => setTimeout(r, 500));
         }
@@ -1221,3 +1262,4 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
     .then(() => console.log("🤖 LISTO: TELCEL + BAIT CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
+
