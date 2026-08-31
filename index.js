@@ -6,9 +6,9 @@ const { Telegraf, Markup } = require('telegraf');
 const { chromium } = require('playwright');
 require('dotenv').config();
 
-// ==================================================
-// 🔑 1. CONFIGURACIÓN Y VARIABLES DE ENTORNO
-// ==================================================
+// ==============================================================================
+// 🔑 1. CONFIGURACIÓN Y VARIABLES DE ENTORNO (TELCEL + GENERAL)
+// ==============================================================================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PUERTO = process.env.PORT || 3000;
 const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
@@ -31,15 +31,15 @@ process.on('unhandledRejection', err => {
     console.error('💥 Promesa rechazada:', (err.message || err).toString().slice(0, 140));
 });
 
-// Mapas de sesión y aislamiento total por usuario
+// Mapas de sesión y aislamiento total por usuario (TELCEL)
 const sesiones = new Map();
 const navegadoresActivos = new Map();
 const ejecucionesUsuario = new Map();
 const ultimoMensaje = new Map();
 
-// ==================================================
-// 🎲 2. GENERADORES Y UTILIDADES DE LIMPIEZA
-// ==================================================
+// ==============================================================================
+// 🎲 2. GENERADORES Y UTILIDADES DE LIMPIEZA (TELCEL)
+// ==============================================================================
 const NOMBRES = ['Carlos', 'Alejandro', 'Miguel', 'Jose', 'Juan', 'Fernando', 'Ricardo', 'Daniel', 'Eduardo', 'Gabriel', 'Sofia', 'Maria', 'Ana', 'Valeria', 'Camila', 'Andrea', 'Natalia', 'Daniela'];
 const APELLIDOS = ['Hernandez', 'Garcia', 'Martinez', 'Lopez', 'Gonzalez', 'Perez', 'Rodriguez', 'Sanchez', 'Ramirez', 'Cruz', 'Flores', 'Gomez', 'Morales', 'Vazquez', 'Reyes', 'Jimenez'];
 
@@ -113,9 +113,9 @@ async function enviarFotoLimpia(ctx, foto, opciones = {}) {
     return nuevoMsg;
 }
 
-// ==================================================
-// 🌐 3. NAVEGADOR Y GEOLOCALIZACIÓN MÉXICO
-// ==================================================
+// ==============================================================================
+// 🌐 3. NAVEGADOR Y GEOLOCALIZACIÓN MÉXICO (TELCEL)
+// ==============================================================================
 async function lanzarNavegador(id) {
     await cerrarSesionNavegador(id);
 
@@ -197,9 +197,9 @@ async function aceptarUbicacionSiAparece(pagina) {
     return false;
 }
 
-// ==================================================
-// 📦 4. FUNCIONES MODULARES DE PAQUETES ($200, $300, $500)
-// ==================================================
+// ==============================================================================
+// 📦 4. FUNCIONES MODULARES DE PAQUETES ($200, $300, $500) (TELCEL)
+// ==============================================================================
 async function abrirMasPaquetes(pagina, monto) {
     await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
 
@@ -271,9 +271,9 @@ async function ejecutarConReintento(fn, intentosMax = 3, id) {
     throw ultimoError;
 }
 
-// ==================================================
-// 💳 5. FLUJO AUTOMÁTICO DE RECARGA TELCEL
-// ==================================================
+// ==============================================================================
+// 💳 5. FLUJO AUTOMÁTICO DE RECARGA TELCEL (INTACTO)
+// ==============================================================================
 async function flujoTelcelIndependiente(ctx, id, datos) {
     const { numero, cc, mes, anio, cvv, nombre, monto: montoIn } = datos;
     const monto = montoIn || 200;
@@ -664,13 +664,13 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
     }
 }
 
-// ==================================================
-// 🤖 6. COMANDOS Y BOTONES TELEGRAM
-// ==================================================
+// ==============================================================================
+// 🤖 6. COMANDOS Y BOTONES TELEGRAM (TELCEL)
+// ==============================================================================
 bot.command(['start', 'menu', 'ayuda'], async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
     await cerrarSesionNavegador(id);
-    sesiones.set(id, { paso: 'elegir_monto' });
+    sesiones.set(id, { servicio: 'telcel', paso: 'elegir_monto' });
 
     await enviarLimpio(
         ctx,
@@ -693,7 +693,7 @@ bot.action(['monto_200', 'monto_300', 'monto_500'], async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
     const monto = parseInt(ctx.match[0].replace('monto_', ''), 10) || 200;
 
-    sesiones.set(id, { paso: 1, monto });
+    sesiones.set(id, { servicio: 'telcel', paso: 1, monto });
 
     await enviarLimpio(
         ctx,
@@ -708,7 +708,7 @@ bot.action('nueva_recarga_telcel', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
     const id = ctx.chat?.id || ctx.from?.id;
     await cerrarSesionNavegador(id);
-    sesiones.set(id, { paso: 'elegir_monto' });
+    sesiones.set(id, { servicio: 'telcel', paso: 'elegir_monto' });
 
     await enviarLimpio(
         ctx,
@@ -729,6 +729,7 @@ bot.action(['cancelar_accion', 'cancelar', 'salir'], async ctx => {
     await ctx.answerCbQuery().catch(() => {});
     const id = ctx.chat?.id || ctx.from?.id;
     await cerrarSesionNavegador(id);
+    await cerrarBait(id);
     sesiones.delete(id);
     await enviarLimpio(ctx, "✅ Sesión cerrada y recursos liberados.\n📌 Escribe /start para reiniciar.");
 });
@@ -753,7 +754,7 @@ bot.command(['recarga', 'telcel'], async ctx => {
             const anio = anioCompleto.slice(-2);
             const nombre = generarNombreCompleto();
 
-            sesiones.set(id, { numero, cc, mes, anio, cvv, nombre, monto });
+            sesiones.set(id, { servicio: 'telcel', numero, cc, mes, anio, cvv, nombre, monto });
 
             return flujoTelcelIndependiente(ctx, id, { numero, cc, mes, anio, cvv, nombre, monto }).catch(err => {
                 console.error(`[Telcel Usuario ${id}] Error:`, err.message || err);
@@ -761,7 +762,7 @@ bot.command(['recarga', 'telcel'], async ctx => {
         }
     }
 
-    sesiones.set(id, { paso: 'elegir_monto' });
+    sesiones.set(id, { servicio: 'telcel', paso: 'elegir_monto' });
     await enviarLimpio(
         ctx,
         `📱 **¿Cuánto deseas recargar?**\n` +
@@ -777,14 +778,295 @@ bot.command(['recarga', 'telcel'], async ctx => {
     );
 });
 
+
+// ==============================================================================
+// 🌟 7. MÓDULO TOTALMENTE INDEPENDIENTE: BAIT MÉXICO + PAYPAL
+// ==============================================================================
+const URL_BAIT = process.env.URL_BAIT || 'https://mibait.com/recargas';
+const PASARELA_MALA_BAIT = ['PCI', 'DSS', 'Innovación', 'Walmart', 'telcel', 'portal'];
+const PASARELA_BUENA_BAIT = ['PayPal', 'Desarrollado por PayPal'];
+const navegadoresBait = new Map();
+
+const NOMBRES_BAIT = ['Luis', 'Ana', 'Juan', 'Sofía', 'Carlos', 'María', 'Pedro', 'Lucía'];
+const APELLIDOS_BAIT = ['García', 'Martínez', 'López', 'Rodríguez', 'Pérez', 'Gómez', 'Sánchez', 'Díaz'];
+const CPS_BAIT = ['06000', '03810', '11560', '06700', '03100'];
+const CORREOS_BAIT = ['prueba@mail.com.mx', 'usuario@mx.com', 'recarga@telcel.mx', 'cliente@paypal.com.mx'];
+
+const generarBait = {
+    nombre: () => NOMBRES_BAIT[(Math.random() * NOMBRES_BAIT.length) | 0],
+    apellido: () => APELLIDOS_BAIT[(Math.random() * APELLIDOS_BAIT.length) | 0] + ' ' + APELLIDOS_BAIT[(Math.random() * APELLIDOS_BAIT.length) | 0],
+    cp: () => CPS_BAIT[(Math.random() * CPS_BAIT.length) | 0],
+    correo: () => CORREOS_BAIT[(Math.random() * CORREOS_BAIT.length) | 0],
+    celular: () => '55' + Math.floor(Math.random() * 90000000 + 10000000)
+};
+
+const cerrarBait = async id => {
+    if (id && navegadoresBait.has(id)) {
+        try { await navegadoresBait.get(id).close(); } catch {}
+        navegadoresBait.delete(id);
+    } else if (!id) {
+        for (const [key, nav] of navegadoresBait.entries()) {
+            try { await nav.close(); } catch {}
+            navegadoresBait.delete(key);
+        }
+    }
+    global.gc?.();
+};
+
+const lanzarMexicoBait = async id => {
+    await cerrarBait(id);
+    const geo = { latitude: 19.4326, longitude: -99.1332, accuracy: 100 };
+    const args = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-images',
+        '--disable-extensions',
+        '--lang=es-MX',
+        '--accept-lang=es-MX,es;q=0.9,en;q=0.8'
+    ];
+
+    let nav, pag;
+    if (BRIGHTDATA_BROWSER_WS && (BRIGHTDATA_BROWSER_WS.startsWith('ws://') || BRIGHTDATA_BROWSER_WS.startsWith('wss://'))) {
+        console.log(`[Bait Usuario ${id}] 🌐 Conectando a Bright Data Browser (México)...`);
+        nav = await chromium.connectOverCDP(BRIGHTDATA_BROWSER_WS, { timeout: 35000 });
+        const contexto = nav.contexts()[0] || await nav.newContext({
+            locale: 'es-MX',
+            timezoneId: 'America/Mexico_City',
+            geolocation: geo,
+            permissions: ['geolocation'],
+            viewport: { width: 1200, height: 800 },
+            extraHTTPHeaders: { 'Accept-Language': 'es-MX,es;q=0.9' }
+        });
+        await contexto.grantPermissions(['geolocation'], { origin: 'https://mibait.com' }).catch(() => {});
+        await contexto.setGeolocation(geo).catch(() => {});
+        pag = contexto.pages()[0] || await contexto.newPage();
+    } else {
+        console.log(`[Bait Usuario ${id}] 🖥️ Lanzando Chromium local (México)...`);
+        nav = await chromium.launch({ headless: ES_HEADLESS, timeout: 35000, args });
+        const contexto = await nav.newContext({
+            locale: 'es-MX',
+            timezoneId: 'America/Mexico_City',
+            geolocation: geo,
+            permissions: ['geolocation'],
+            viewport: { width: 1200, height: 800 },
+            extraHTTPHeaders: { 'Accept-Language': 'es-MX,es;q=0.9' }
+        });
+        await contexto.grantPermissions(['geolocation'], { origin: 'https://mibait.com' }).catch(() => {});
+        pag = await contexto.newPage();
+        await pag.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { value: false }));
+    }
+
+    await pag.context().addCookies([
+        { name: 'country', value: 'MX', domain: '.paypal.com', path: '/' },
+        { name: 'lc', value: 'es_MX', domain: '.paypal.com', path: '/' },
+        { name: 'x-cdn-country', value: 'MX', domain: '.paypal.com', path: '/' }
+    ]).catch(() => {});
+
+    pag.setDefaultTimeout(20000);
+    pag.setDefaultNavigationTimeout(35000);
+    navegadoresBait.set(id, nav);
+    return pag;
+};
+
+const validarPaisYPaginaBait = async (pag, montoEsperado) => {
+    try {
+        const texto = (await pag.evaluate(() => document.body ? document.body.innerText : '') || '').toLowerCase();
+        const html = (await pag.content().catch(() => '')) || '';
+
+        const tieneMexico = html.includes('mx') || html.includes('MX') || texto.includes('méxico') || texto.includes('mexico') || html.includes('flag=mx');
+        const tieneUSA = html.includes('us') || html.includes('US') || texto.includes('estados unidos') || texto.includes('united states');
+
+        if (!tieneMexico || tieneUSA) {
+            console.log(`[Bait] ❌ PAÍS INCORRECTO: México=${tieneMexico} | USA=${tieneUSA}`);
+            return { ok: false, motivo: 'PAÍS_NO_MÉXICO' };
+        }
+
+        const esPayPal = PASARELA_BUENA_BAIT.some(x => texto.includes(x.toLowerCase()));
+        const esMala = PASARELA_MALA_BAIT.some(x => texto.includes(x.toLowerCase()));
+        const btnPagar = pag.locator(`button:has-text("Pagar $${montoEsperado}.00 MXN"), button:has-text("Pagar $${montoEsperado}"), button:has-text("Pagar")`).first();
+        const montoCorrecto = await btnPagar.isVisible({ timeout: 4000 }).catch(() => false);
+
+        return {
+            ok: esPayPal && !esMala && montoCorrecto,
+            motivo: `PayPal:${esPayPal}|Monto:${montoCorrecto}`
+        };
+    } catch (e) {
+        return { ok: false, motivo: `ERROR:${e.message.slice(0, 30)}` };
+    }
+};
+
+const aceptarCookiesBait = async pag => {
+    try {
+        const btn = pag.locator('#onetrust-accept-btn-handler, button:has-text("Aceptar"), button:has-text("Permitir todas"), button:has-text("Acepto")').first();
+        if (await btn.isVisible({ timeout: 2500 }).catch(() => false)) {
+            await btn.click({ timeout: 2500 }).catch(() => {});
+        }
+    } catch {}
+};
+
+async function recargaMexicoPayPalBait(ctx, id, datos) {
+    const { numero, tarjeta, mes, anio, cvv, monto } = datos;
+    await ctx.reply(`🔄 BUSCANDO PASARELA MÉXICO $${monto}...`);
+
+    let intento = 0;
+    const MAX_INTENTOS = 20;
+
+    while (intento < MAX_INTENTOS) {
+        intento++;
+        try {
+            const pag = await lanzarMexicoBait(id);
+            await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await pag.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+            await aceptarCookiesBait(pag);
+
+            const inputTel = pag.locator('input[type="tel"], input#msisdn, input[name="msisdn"]').first();
+            await inputTel.waitFor({ state: 'visible', timeout: 15000 });
+            await inputTel.fill(numero);
+
+            const btnRecargar = pag.locator('button:has-text("Recargar"), button[type="submit"]:has-text("Recargar")').first();
+            await btnRecargar.waitFor({ state: 'visible', timeout: 15000 });
+            await btnRecargar.click();
+
+            await pag.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+            const val = await validarPaisYPaginaBait(pag, monto);
+            if (!val.ok) {
+                let aviso = `❌ Intento ${intento}: `;
+                if (val.motivo.includes('PAÍS_NO_MÉXICO')) {
+                    aviso += `🌐 DETECTADO FUERA DE MÉXICO (posible EE.UU.)\n🔄 Reiniciando configuración país...`;
+                } else {
+                    aviso += `Pasarela/monto inválido (${val.motivo}) → REINICIO`;
+                }
+                await ctx.reply(aviso);
+                await cerrarBait(id);
+                continue;
+            }
+
+            await ctx.reply(`✅ MÉXICO 🇲🇽 + PAYPAL $${monto} ENCONTRADO 🚀`);
+            const nom = generarBait.nombre();
+            const ape = generarBait.apellido();
+            const cp = generarBait.cp();
+            const cel = generarBait.celular();
+            const correo = generarBait.correo();
+
+            const inputCard = pag.locator('input[name="cardNumber"], input#cardNumber, input[placeholder*="tarjeta" i]').first();
+            await inputCard.waitFor({ state: 'visible', timeout: 15000 });
+            await inputCard.fill(tarjeta);
+
+            const inputExp = pag.locator('input[placeholder="Fecha de vencimiento"], input[name="cardExpiry"], input#cardExpiry').first();
+            if (await inputExp.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputExp.fill(`${mes}/${anio.slice(-2)}`);
+            }
+
+            const inputCsc = pag.locator('input[placeholder="CSC"], input[name="cardCvv"], input#cardCvv, input[placeholder*="CVV" i]').first();
+            if (await inputCsc.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputCsc.fill(cvv);
+            }
+
+            const inputNom = pag.locator('input[placeholder="Nombre"], input[name="firstName"]').first();
+            if (await inputNom.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputNom.fill(nom);
+            }
+
+            const inputApe = pag.locator('input[placeholder="Apellidos"], input[name="lastName"]').first();
+            if (await inputApe.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputApe.fill(ape);
+            }
+
+            const inputCp = pag.locator('input[placeholder="Código postal"], input[name="postalCode"]').first();
+            if (await inputCp.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputCp.fill(cp);
+            }
+
+            const inputCel = pag.locator('input[placeholder="Celular"], input[name="phoneNumber"]').first();
+            if (await inputCel.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputCel.fill(cel);
+            }
+
+            const inputMail = pag.locator('input[placeholder="Correo electrónico"], input[name="email"]').first();
+            if (await inputMail.isVisible({ timeout: 2000 }).catch(() => false)) {
+                await inputMail.fill(correo);
+            }
+
+            const casilla = pag.locator('input[type="checkbox"]').filter({ hasText: /Confirmo que soy mayor de edad/i }).first();
+            if (await casilla.isVisible({ timeout: 2000 }).catch(() => false)) {
+                if (!await casilla.isChecked().catch(() => false)) {
+                    await casilla.check({ force: true }).catch(() => {});
+                }
+            }
+
+            const btnPagar = pag.locator(`button:has-text("Pagar $${monto}.00 MXN"), button:has-text("Pagar $${monto}"), button:has-text("Pagar")`).first();
+            await btnPagar.waitFor({ state: 'visible', timeout: 15000 });
+            await btnPagar.click({ timeout: 15000 });
+
+            await pag.waitForLoadState('networkidle', { timeout: 45000 }).catch(() => {});
+            const foto = await pag.screenshot({ fullPage: true }).catch(() => null);
+
+            if (foto) {
+                await ctx.replyWithPhoto({ source: foto }, {
+                    caption: `✅ PAGO ENVIADO 🇲🇽\n📱 ${numero}\n💰 $${monto}.00 MXN\n👤 ${nom} ${ape}\n💳 ****${tarjeta.slice(-4)}`
+                });
+            } else {
+                await ctx.reply(`✅ PAGO ENVIADO 🇲🇽\n📱 ${numero}\n💰 $${monto}.00 MXN\n👤 ${nom} ${ape}\n💳 ****${tarjeta.slice(-4)}`);
+            }
+
+            await cerrarBait(id);
+            return;
+
+        } catch (e) {
+            console.log(`[Bait] ⚠️ Intento ${intento}: ${e.message.slice(0, 60)}`);
+            await ctx.reply(`⚠️ Intento ${intento} falló → Reintentando...`);
+            await cerrarBait(id);
+        }
+    }
+
+    await ctx.reply(`❌ AGOTADOS ${MAX_INTENTOS} INTENTOS\n🌐 No se logró fijar PAÍS MÉXICO + PAYPAL\nRevisa proxy/ubicación`);
+}
+
+bot.command('bait', async ctx => {
+    const id = ctx.chat.id;
+    const args = ctx.message.text.trim().split(/\s+/);
+    const num = args[1];
+    const monto = parseInt(args[2], 10) || 300;
+
+    if (!num || !/^\d{10}$/.test(num)) {
+        return ctx.reply(`🤖 **BOT BAIT • SOLO MÉXICO 🇲🇽 • PAYPAL**\n\n📲 USO:\n/bait 5512345678 MONTO\nEj: /bait 5512345678 300\nLuego envía: 16DÍGITOS|MM|AAAA|CVV`);
+    }
+    if (![200, 300, 500].includes(monto)) {
+        return ctx.reply(`❌ Montos válidos para Bait: 200, 300, 500`);
+    }
+
+    sesiones.set(id, { servicio: 'bait', paso: 'tarjeta_bait', numero: num, monto });
+    await ctx.reply(`✅ RECARGA BAIT $${monto} 🇲🇽\n📱 ${num}\n💳 Envía:\n16DÍGITOS|MM|AAAA|CVV`);
+});
+
+
+// ==============================================================================
+// 📨 8. ROUTER DE MENSAJES DE TEXTO (TELCEL + BAIT INDEPENDIENTES)
+// ==============================================================================
 bot.on('text', async (ctx, next) => {
     const id = ctx.chat?.id || ctx.from?.id;
     const txt = ctx.message.text.trim();
 
     if (txt.startsWith('/')) return next();
 
+    // Flujo BAIT
+    if (sesiones.has(id) && sesiones.get(id).servicio === 'bait') {
+        const s = sesiones.get(id);
+        if (s.paso === 'tarjeta_bait') {
+            const [tar, mes, anio, cvv] = txt.split('|').map(t => t.trim());
+            if (!/^\d{16}$/.test(tar) || !/^\d{2}$/.test(mes) || !/^\d{4}$/.test(anio) || !/^\d{3,4}$/.test(cvv)) {
+                return ctx.reply(`❌ Formato inválido:\n4111111111111111|12|2028|123`);
+            }
+            sesiones.delete(id);
+            return recargaMexicoPayPalBait(ctx, id, { numero: s.numero, tarjeta: tar, mes, anio, cvv, monto: s.monto });
+        }
+    }
+
+    // Flujo TELCEL (Intacto)
     if (!sesiones.has(id)) {
-        sesiones.set(id, { paso: 'elegir_monto' });
+        sesiones.set(id, { servicio: 'telcel', paso: 'elegir_monto' });
         return enviarLimpio(
             ctx,
             `📱 **Bienvenido al Bot de Recargas Telcel**\n` +
@@ -803,12 +1085,12 @@ bot.on('text', async (ctx, next) => {
     const estado = sesiones.get(id);
     const monto = estado.monto || 200;
 
-    // PASO 1: RECIBIR NÚMERO
+    // TELCEL PASO 1: RECIBIR NÚMERO
     if (estado.paso === 1 || estado.paso === 'numero') {
         if (!/^\d{10}$/.test(txt)) {
             return enviarLimpio(ctx, "❌ Número inválido (debe tener exactamente 10 dígitos).\n\n📲 Escribe tu número celular:");
         }
-        sesiones.set(id, { paso: 2, numero: txt, monto });
+        sesiones.set(id, { servicio: 'telcel', paso: 2, numero: txt, monto });
         return enviarLimpio(
             ctx,
             `✅ **NÚMERO RECIBIDO:** \`${txt}\`\n` +
@@ -819,7 +1101,7 @@ bot.on('text', async (ctx, next) => {
         );
     }
 
-    // PASO 2: RECIBIR TARJETA Y LANZAR AUTOMÁTICAMENTE
+    // TELCEL PASO 2: RECIBIR TARJETA Y LANZAR AUTOMÁTICAMENTE
     if (estado.paso === 2 || estado.paso === 'tarjeta') {
         const partes = txt.split('|').map(p => p.trim());
         if (partes.length !== 4) {
@@ -840,7 +1122,7 @@ bot.on('text', async (ctx, next) => {
         const numero = estado.numero;
         const nombre = generarNombreCompleto();
 
-        sesiones.set(id, { numero, cc, mes, anio, cvv, nombre, monto });
+        sesiones.set(id, { servicio: 'telcel', numero, cc, mes, anio, cvv, nombre, monto });
 
         flujoTelcelIndependiente(ctx, id, { numero, cc, mes, anio, cvv, nombre, monto }).catch(err => {
             console.error(`[Telcel Usuario ${id}] Error en ejecución:`, err.message || err);
@@ -848,12 +1130,12 @@ bot.on('text', async (ctx, next) => {
     }
 });
 
-// ==================================================
-// 🚀 7. SERVIDOR HTTP Y MANTENEDOR ANTI-APAGADO
-// ==================================================
+// ==============================================================================
+// 🚀 9. SERVIDOR HTTP Y MANTENEDOR ANTI-APAGADO
+// ==============================================================================
 const servidor = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Bot Telcel activo y funcionando ✅');
+    res.end('Bot de Recargas activo y funcionando ✅');
 });
 
 process.once('SIGINT', async () => {
@@ -862,6 +1144,7 @@ process.once('SIGINT', async () => {
     for (const [id] of navegadoresActivos) {
         await cerrarSesionNavegador(id);
     }
+    await cerrarBait();
     servidor.close(() => process.exit(0));
 });
 
@@ -871,6 +1154,7 @@ process.once('SIGTERM', async () => {
     for (const [id] of navegadoresActivos) {
         await cerrarSesionNavegador(id);
     }
+    await cerrarBait();
     servidor.close(() => process.exit(0));
 });
 
@@ -899,6 +1183,6 @@ servidor.listen(PUERTO, '0.0.0.0', () => {
         polling: true,
         timeout: 25000
     })
-    .then(() => console.log("🤖 BOT TELEGRAM TELCEL CONECTADO EXITOSAMENTE"))
+    .then(() => console.log("🤖 BOT TELEGRAM CONECTADO EXITOSAMENTE"))
     .catch(err => console.error("❌ ERROR BOT:", err.message || err));
 });
