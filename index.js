@@ -21,7 +21,11 @@ if (!BOT_TOKEN) {
     console.error("❌ ERROR: La variable de entorno BOT_TOKEN no está configurada.");
 }
 
-const bot = new Telegraf(BOT_TOKEN || 'DUMMY_TOKEN', { handlerTimeout: 0 });
+const bot = new Telegraf(BOT_TOKEN || 'DUMMY_TOKEN', { handlerTimeout: Infinity });
+
+bot.catch((err, ctx) => {
+    console.error(`[Telegram Error] Handler error para update ${ctx?.update?.update_id}:`, err.message || err);
+});
 
 // Protección global de estabilidad
 process.on('uncaughtException', err => {
