@@ -144,12 +144,31 @@ async function lanzarNavegador(id) {
         console.log(`[Usuario ${id}] 🖥️ Lanzando Chromium local...`);
         navegador = await chromium.launch({
             headless: ES_HEADLESS,
-            timeout: 45000,
+            timeout: 30000,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
+                '--disable-software-rasterizer',
+                '--disable-extensions',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-breakpad',
+                '--disable-client-side-phishing-detection',
+                '--disable-default-apps',
+                '--disable-dev-tools',
+                '--disable-hang-monitor',
+                '--disable-popup-blocking',
+                '--disable-prompt-on-repost',
+                '--disable-renderer-backgrounding',
+                '--disable-sync',
+                '--disable-translate',
+                '--metrics-recording-only',
+                '--no-first-run',
+                '--safebrowsing-disable-auto-update',
+                '--mute-audio',
                 '--lang=es-MX'
             ]
         });
@@ -206,7 +225,7 @@ async function aceptarUbicacionSiAparece(pagina) {
 // 📦 4. FUNCIONES MODULARES DE PAQUETES ($200, $300, $500) (TELCEL)
 // ==============================================================================
 async function abrirMasPaquetes(pagina, monto) {
-    await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
     const botonVerMas = pagina.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")');
     await botonVerMas.waitFor({ state: 'attached', timeout: 20000 });
@@ -219,7 +238,7 @@ async function abrirMasPaquetes(pagina, monto) {
 
     await botonVerMas.click({ force: true });
     console.log('[Telcel] Clic en "Ver más paquetes" realizado');
-    await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
     const tarjetaEsperada = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
@@ -232,7 +251,7 @@ async function abrirMasPaquetes(pagina, monto) {
 }
 
 async function seleccionarPaquete(pagina, monto) {
-    await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
     const tarjeta = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
@@ -256,7 +275,7 @@ async function seleccionarPaquete(pagina, monto) {
 
     await botonLoQuiero.click({ force: true });
     console.log(`[Telcel] Paquete $${monto} seleccionado`);
-    await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 }
 
 async function ejecutarConReintento(fn, intentosMax = 3, id) {
@@ -326,7 +345,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 ultimaEtapa = "Navegación a Telcel Pay";
                 await pagina.goto(URL_TELCEL, { waitUntil: 'commit', timeout: 45000 });
                 await pagina.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
-                await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+                await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
                 await aceptarUbicacionSiAparece(pagina);
 
@@ -362,7 +381,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 await btnContinuarTel.waitFor({ state: 'visible', timeout: 25000 });
                 await btnContinuarTel.scrollIntoViewIfNeeded().catch(() => {});
                 await btnContinuarTel.click({ force: true });
-                await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+                await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
                 ultimaEtapa = "Llenado de datos de tarjeta";
                 const inputCC = pagina.locator('input#creditCardNumber, input[placeholder*="16 dígitos" i], input[name="cardNumber"]').first();
@@ -474,7 +493,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 }
 
                 ultimaEtapa = "Esperando procesamiento de Telcel";
-                await pagina.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+                await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
 
                 const capturaProcesando = await pagina.screenshot({ fullPage: true }).catch(() => null);
                 if (capturaProcesando && miId === ejecucionesUsuario.get(id)) {
