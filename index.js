@@ -3406,60 +3406,181 @@ async function buscarVisibleTienda(page, selectors, timeoutTotal = 12000) {
 }
 
 async function llenarNumeroTienda(page, numero, id) {
-    // 1. Casilla 1: Número Telcel (mdn)
-    const selsMdn = [
-        'input#mdn',
-        'input[name="mdn"]',
-        'input[autocomplete="tel-national"]',
-        'input[placeholder="A 10 dígitos"]',
-        'input[type="tel"]'
-    ];
+    const inputsNumero = page.locator(
+        'input[placeholder*="10 dígitos" i], input[placeholder*="10 digitos" i], input[type="tel"]'
+    );
 
-    const primerCampo = await buscarVisibleTienda(page, selsMdn, 15000);
-    if (!primerCampo) {
+    const inicio = Date.now();
+    let campos = [];
+
+    while (Date.now() - inicio < 25000) {
+        const total = await inputsNumero.count().catch(() => 0);
+        campos = [];
+
+        for (let i = 0; i < total; i++) {
+            const loc = inputsNumero.nth(i);
+
+            if (
+                await loc.isVisible({
+                    timeout: 100
+                }).catch(() => false)
+            ) {
+                campos.push(loc);
+            }
+        }
+
+        if (campos.length >= 2) break;
+
+        await page.evaluate(() => {
+            window.scrollBy(0, 120);
+        }).catch(() => {});
+
+        await page.waitForTimeout(300);
+    }
+
+    if (campos.length < 2) {
+        console.log(`[Telcel.com Usuario ${id}] ❌ Formulario Telcel no terminó de renderizar`);
+        await tomarCapturaTienda(page, id, 'error_formulario_render').catch(() => null);
         throw new Error('CAMPO_NUMERO_TELCEL_NO_ENCONTRADO');
     }
 
-    await primerCampo.loc.scrollIntoViewIfNeeded().catch(() => {});
-    await primerCampo.loc.click().catch(() => {});
-    await primerCampo.loc.fill(numero);
-    await primerCampo.loc.dispatchEvent('input', { bubbles: true }).catch(() => {});
-    await primerCampo.loc.dispatchEvent('change', { bubbles: true }).catch(() => {});
-    await primerCampo.loc.dispatchEvent('blur', { bubbles: true }).catch(() => {});
+    const campoNumero = campos[0];
+    const campoConfirmacion = campos[1];
+
+    await campoNumero.scrollIntoViewIfNeeded();
+    await campoNumero.click();
+    await campoNumero.fill(numero);
+
+    await campoNumero.dispatchEvent('input', {
+        bubbles: true
+    }).catch(() => {});
+
+    await campoNumero.dispatchEvent('change', {
+        bubbles: true
+    }).catch(() => {});
+
+    await campoNumero.dispatchEvent('blur', {
+        bubbles: true
+    }).catch(() => {});
 
     await page.waitForTimeout(400);
 
-    // 2. Casilla 2: Confirmar el número Telcel (confirmMdn)
-    const selsConfirmMdn = [
-        'input#confirmMdn',
-        'input[name="confirmMdn"]',
-        'input[placeholder="A 10 dígitos"]:not(#mdn)',
-        'input[autocomplete="off"][type="tel"]'
+    await campoConfirmacion.scrollIntoViewIfNeeded();
+    await campoConfirmacion.click();
+    await campoConfirmacion.fill(numero);
+
+    await campoConfirmacion.dispatchEvent('input', {
+        bubbles: true
+    }).catch(() => {});
+
+    await campoConfirmacion.dispatchEvent('change', {
+        bubbles: true
+    }).catch(() => {});
+
+    await campoConfirmacion.dispatchEvent('blur', {
+        bubbles: true
+    }).catch(() => {});
+
+    const valor1 = await campoNumero.inputValue().catch(() => '');
+    const valor2 = await campoConfirmacion.inputValue().catch(() => '');
+
+    console.log(
+        `[Telcel.com Usuario ${id}] 📱 Campos encontrados: ` +
+        `numero=${valor1.length === 10}, confirmacion=${valor2.length === 10}`
+    );
+    logTelcelTienda(id, `📱 [Telcel.com] Número ingresado: ${numero}`);
+}
+
+async function seleccionarTipoCompraTienda(page, id) {
+    logTelcelTienda(
+        id,
+        '📦 [Telcel.com] Seleccionando Paquetes Amigo Sin Límite'
+    );
+
+    await page.evaluate(() => {
+        window.scrollBy({
+            top: 300,
+            behavior: 'smooth'
+        });
+    }).catch(() => {});
+
+    await page.waitForTimeout(700);
+
+    const abrirSelector = [
+        '[role="combobox"]',
+        'button:has-text("Elige una opción")',
+        'div:has-text("Elige una opción")',
+        'text="Elige una opción"'
     ];
 
-    const segundoCampo = await buscarVisibleTienda(page, selsConfirmMdn, 8000);
-    if (segundoCampo) {
-        await segundoCampo.loc.scrollIntoViewIfNeeded().catch(() => {});
-        await segundoCampo.loc.click().catch(() => {});
-        await segundoCampo.loc.fill(numero);
-        await segundoCampo.loc.dispatchEvent('input', { bubbles: true }).catch(() => {});
-        await segundoCampo.loc.dispatchEvent('change', { bubbles: true }).catch(() => {});
-        await segundoCampo.loc.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-    } else {
-        const todosInputsTel = page.locator('input[type="tel"]');
-        const total = await todosInputsTel.count().catch(() => 0);
-        if (total >= 2) {
-            const segundo = todosInputsTel.nth(1);
-            await segundo.fill(numero);
-            await segundo.dispatchEvent('input', { bubbles: true }).catch(() => {});
-            await segundo.dispatchEvent('change', { bubbles: true }).catch(() => {});
-            await segundo.dispatchEvent('blur', { bubbles: true }).catch(() => {});
-        } else {
-            throw new Error('CAMPO_CONFIRMAR_NUMERO_NO_ENCONTRADO');
-        }
+    let selector = null;
+
+    for (const sel of abrirSelector) {
+        try {
+            const loc = page.locator(sel).first();
+
+            if (
+                await loc.isVisible({
+                    timeout: 800
+                }).catch(() => false)
+            ) {
+                selector = loc;
+                break;
+            }
+        } catch (_) {}
     }
 
-    logTelcelTienda(id, `📱 [Telcel.com] Número ingresado: ${numero}`);
+    if (!selector) {
+        throw new Error(
+            'TIPO_COMPRA_NO_ENCONTRADO'
+        );
+    }
+
+    await selector.scrollIntoViewIfNeeded().catch(() => {});
+    await page.waitForTimeout(300);
+    await selector.click();
+
+    await page.waitForTimeout(500);
+
+    const opciones = [
+        '[role="option"]:has-text("Paquetes Amigo Sin Límite")',
+        'li:has-text("Paquetes Amigo Sin Límite")',
+        'button:has-text("Paquetes Amigo Sin Límite")',
+        'text="Paquetes Amigo Sin Límite"'
+    ];
+
+    let opcion = null;
+
+    for (const sel of opciones) {
+        try {
+            const loc = page.locator(sel).first();
+
+            if (
+                await loc.isVisible({
+                    timeout: 1000
+                }).catch(() => false)
+            ) {
+                opcion = loc;
+                break;
+            }
+        } catch (_) {}
+    }
+
+    if (!opcion) {
+        throw new Error(
+            'PAQUETES_AMIGO_SIN_LIMITE_NO_ENCONTRADO'
+        );
+    }
+
+    await opcion.scrollIntoViewIfNeeded().catch(() => {});
+    await opcion.click();
+
+    await page.waitForTimeout(800);
+
+    logTelcelTienda(
+        id,
+        '✅ [Telcel.com] Tipo de compra: Paquetes Amigo Sin Límite'
+    );
 }
 
 async function continuarTienda(page, id) {
@@ -3477,10 +3598,37 @@ async function continuarTienda(page, id) {
         throw new Error('BOTON_CONTINUAR_NO_ENCONTRADO');
     }
 
-    logTelcelTienda(id, `➡️ [Telcel.com] Continuando`);
-    await encontrado.loc.scrollIntoViewIfNeeded().catch(() => {});
+    const boton = encontrado.loc;
+    await boton.scrollIntoViewIfNeeded().catch(() => {});
+
+    // Esperar hasta 10 segundos a que isVisible() y isEnabled() sean true
+    const inicioEspera = Date.now();
+    let habilitado = false;
+
+    while (Date.now() - inicioEspera < 10000) {
+        const visible = await boton.isVisible({ timeout: 200 }).catch(() => false);
+        const activo = await boton.isEnabled({ timeout: 200 }).catch(() => false);
+
+        if (visible && activo) {
+            habilitado = true;
+            break;
+        }
+
+        await page.waitForTimeout(250);
+    }
+
+    if (!habilitado) {
+        throw new Error('BOTON_CONTINUAR_NO_HABILITADO');
+    }
+
+    logTelcelTienda(id, '✅ [Telcel.com] Número 1 validado');
+    logTelcelTienda(id, '✅ [Telcel.com] Número 2 validado');
+    logTelcelTienda(id, '✅ [Telcel.com] Paquetes Amigo Sin Límite seleccionado');
+    logTelcelTienda(id, '✅ [Telcel.com] Botón Continuar habilitado');
+    logTelcelTienda(id, '➡️ [Telcel.com] Continuando');
+
     await page.waitForTimeout(300);
-    await encontrado.loc.click();
+    await boton.click();
     await page.waitForTimeout(2000);
 }
 
@@ -3619,17 +3767,58 @@ async function flujoTelcelTienda(ctx, id, datos) {
         });
         logTelcelTienda(id, `🌐 [Telcel.com] Página cargada`);
 
+        await page.waitForLoadState('domcontentloaded', {
+            timeout: 15000
+        }).catch(() => {});
+
+        await page.waitForLoadState('networkidle', {
+            timeout: 8000
+        }).catch(() => {});
+
         await aceptarCookiesTienda(page);
-        await page.waitForTimeout(1000);
+
+        console.log(`[Telcel.com Usuario ${id}] ⏳ Esperando formulario de recarga...`);
+
+        await page.waitForTimeout(2500);
+
+        await page.evaluate(async () => {
+            for (let y = 0; y <= 700; y += 175) {
+                window.scrollTo({
+                    top: y,
+                    behavior: 'smooth'
+                });
+                await new Promise(r => setTimeout(r, 250));
+            }
+        });
+
+        await page.waitForTimeout(800);
+
+        const tituloRecarga = page.getByText(
+            'Recarga saldo o compra paquetes para tu Amigo',
+            { exact: false }
+        ).first();
+
+        await tituloRecarga.waitFor({
+            state: 'visible',
+            timeout: 20000
+        }).catch(() => {});
+
+        if (await tituloRecarga.isVisible().catch(() => false)) {
+            await tituloRecarga.scrollIntoViewIfNeeded().catch(() => {});
+            await page.waitForTimeout(700);
+        }
 
         // PASO 1: Ingresar número en ambas casillas
         await llenarNumeroTienda(page, numero, id);
         await page.waitForTimeout(600);
 
-        // PASO 2: Continuar
+        // PASO 2: Seleccionar tipo de compra (Paquetes Amigo Sin Límite)
+        await seleccionarTipoCompraTienda(page, id);
+
+        // PASO 3: Continuar
         await continuarTienda(page, id);
 
-        // PASO 3: Seleccionar monto
+        // PASO 4: Seleccionar monto
         await seleccionarMontoTienda(page, monto, id);
 
         // PASO 4: Detectar pantalla donde comienzan los datos de pago
