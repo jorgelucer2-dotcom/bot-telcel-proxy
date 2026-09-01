@@ -3406,30 +3406,90 @@ async function buscarVisibleTienda(page, selectors, timeoutTotal = 12000) {
 }
 
 async function llenarNumeroTienda(page, numero, id) {
-    const inputsNumero = page.locator(
-        'input[placeholder*="10 dígitos" i], input[placeholder*="10 digitos" i], input[type="tel"]'
-    );
-
     const inicio = Date.now();
-    let campos = [];
+    let campoNumero = null;
+    let campoConfirmacion = null;
+
+    // Antes de buscar los campos, localizar título de sección
+    const tituloRecarga = page.getByText(
+        'Recarga saldo o compra paquetes para tu Amigo',
+        { exact: false }
+    ).first();
+
+    if (await tituloRecarga.isVisible({ timeout: 1500 }).catch(() => false)) {
+        await tituloRecarga.scrollIntoViewIfNeeded().catch(() => {});
+        await page.waitForTimeout(500);
+    }
 
     while (Date.now() - inicio < 25000) {
-        const total = await inputsNumero.count().catch(() => 0);
-        campos = [];
+        // 1. Intentar localizar por getByLabel / aria-label prioritariamente
+        const candidatosNum1 = [
+            page.getByLabel('Número Telcel', { exact: true }).first(),
+            page.getByLabel('Numero Telcel', { exact: true }).first(),
+            page.locator('input[aria-label="Número Telcel"]').first(),
+            page.locator('input[aria-label="Numero Telcel"]').first(),
+            page.locator('input[name="mdn"]').first(),
+            page.locator('input#mdn').first()
+        ];
 
-        for (let i = 0; i < total; i++) {
-            const loc = inputsNumero.nth(i);
-
-            if (
-                await loc.isVisible({
-                    timeout: 100
-                }).catch(() => false)
-            ) {
-                campos.push(loc);
+        for (const loc of candidatosNum1) {
+            if (await loc.isVisible({ timeout: 100 }).catch(() => false)) {
+                campoNumero = loc;
+                break;
             }
         }
 
-        if (campos.length >= 2) break;
+        const candidatosNum2 = [
+            page.getByLabel('Confirmar el número Telcel', { exact: true }).first(),
+            page.getByLabel('Confirmar el numero Telcel', { exact: true }).first(),
+            page.locator('input[aria-label*="Confirmar" i]').first(),
+            page.locator('input[name="confirmMdn"]').first(),
+            page.locator('input#confirmMdn').first()
+        ];
+
+        for (const loc of candidatosNum2) {
+            if (await loc.isVisible({ timeout: 100 }).catch(() => false)) {
+                campoConfirmacion = loc;
+                break;
+            }
+        }
+
+        // 2. Si no se encontraron ambos por label/aria, usar fallback inspeccionando inputs visibles
+        if (!campoNumero || !campoConfirmacion) {
+            const inputsGeneral = page.locator('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+            const total = await inputsGeneral.count().catch(() => 0);
+            const filtrados = [];
+
+            for (let i = 0; i < total; i++) {
+                const inputLoc = inputsGeneral.nth(i);
+                const esVisible = await inputLoc.isVisible({ timeout: 50 }).catch(() => false);
+                const esEditable = await inputLoc.isEditable({ timeout: 50 }).catch(() => false);
+
+                if (esVisible && esEditable) {
+                    const maxLen = await inputLoc.getAttribute('maxlength').catch(() => null);
+                    const placeholder = (await inputLoc.getAttribute('placeholder').catch(() => '') || '').toLowerCase();
+                    const tipo = await inputLoc.getAttribute('type').catch(() => '');
+
+                    if (
+                        maxLen === '10' ||
+                        placeholder.includes('10 dígitos') ||
+                        placeholder.includes('10 digitos') ||
+                        tipo === 'tel'
+                    ) {
+                        filtrados.push(inputLoc);
+                    }
+                }
+            }
+
+            if (filtrados.length >= 2) {
+                if (!campoNumero) campoNumero = filtrados[0];
+                if (!campoConfirmacion) campoConfirmacion = filtrados[1];
+            }
+        }
+
+        if (campoNumero && campoConfirmacion) {
+            break;
+        }
 
         await page.evaluate(() => {
             window.scrollBy(0, 120);
@@ -3438,57 +3498,72 @@ async function llenarNumeroTienda(page, numero, id) {
         await page.waitForTimeout(300);
     }
 
-    if (campos.length < 2) {
+    if (!campoNumero || !campoConfirmacion) {
         console.log(`[Telcel.com Usuario ${id}] ❌ Formulario Telcel no terminó de renderizar`);
-        await tomarCapturaTienda(page, id, 'error_formulario_render').catch(() => null);
+
+        // Diagnóstico detallado de inputs en consola
+        const diagnostico = await page.locator('input').evaluateAll(inputs =>
+            inputs.map((el, i) => ({
+                i,
+                type: el.type,
+                name: el.name,
+                id: el.id,
+                placeholder: el.placeholder,
+                ariaLabel: el.getAttribute('aria-label'),
+                maxLength: el.maxLength,
+                visible: !!(
+                    el.offsetWidth ||
+                    el.offsetHeight ||
+                    el.getClientRects().length
+                )
+            }))
+        ).catch(() => []);
+
+        console.log(
+            `[Telcel.com Usuario ${id}] 🔎 INPUTS DETECTADOS:`,
+            JSON.stringify(diagnostico)
+        );
+
+        await tomarCapturaTienda(page, id, 'error_campos_numero').catch(() => null);
         throw new Error('CAMPO_NUMERO_TELCEL_NO_ENCONTRADO');
     }
 
-    const campoNumero = campos[0];
-    const campoConfirmacion = campos[1];
-
+    // Llenar campo 1 (Número Telcel)
     await campoNumero.scrollIntoViewIfNeeded();
     await campoNumero.click();
     await campoNumero.fill(numero);
 
-    await campoNumero.dispatchEvent('input', {
-        bubbles: true
-    }).catch(() => {});
-
-    await campoNumero.dispatchEvent('change', {
-        bubbles: true
-    }).catch(() => {});
-
-    await campoNumero.dispatchEvent('blur', {
-        bubbles: true
-    }).catch(() => {});
+    await campoNumero.dispatchEvent('input', { bubbles: true }).catch(() => {});
+    await campoNumero.dispatchEvent('change', { bubbles: true }).catch(() => {});
+    await campoNumero.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
     await page.waitForTimeout(400);
 
+    // Llenar campo 2 (Confirmar el número Telcel)
     await campoConfirmacion.scrollIntoViewIfNeeded();
     await campoConfirmacion.click();
     await campoConfirmacion.fill(numero);
 
-    await campoConfirmacion.dispatchEvent('input', {
-        bubbles: true
-    }).catch(() => {});
+    await campoConfirmacion.dispatchEvent('input', { bubbles: true }).catch(() => {});
+    await campoConfirmacion.dispatchEvent('change', { bubbles: true }).catch(() => {});
+    await campoConfirmacion.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-    await campoConfirmacion.dispatchEvent('change', {
-        bubbles: true
-    }).catch(() => {});
+    await page.waitForTimeout(300);
 
-    await campoConfirmacion.dispatchEvent('blur', {
-        bubbles: true
-    }).catch(() => {});
-
+    // Comprobar con inputValue()
     const valor1 = await campoNumero.inputValue().catch(() => '');
     const valor2 = await campoConfirmacion.inputValue().catch(() => '');
 
-    console.log(
-        `[Telcel.com Usuario ${id}] 📱 Campos encontrados: ` +
-        `numero=${valor1.length === 10}, confirmacion=${valor2.length === 10}`
-    );
-    logTelcelTienda(id, `📱 [Telcel.com] Número ingresado: ${numero}`);
+    if (valor1 !== numero || valor2 !== numero || valor1.length !== 10 || valor2.length !== 10) {
+        console.log(
+            `[Telcel.com Usuario ${id}] ⚠️ Validación de valores: campo1_len=${valor1.length}, campo2_len=${valor2.length}, coinciden=${valor1 === valor2}`
+        );
+        throw new Error('VALIDACION_NUMERO_FALLIDA');
+    }
+
+    logTelcelTienda(id, '✅ [Telcel.com] Número 1 validado');
+    logTelcelTienda(id, '✅ [Telcel.com] Número 2 validado');
+    logTelcelTienda(id, `📱 [Telcel.com] Número ingresado: ${numero.slice(0, 3)}***${numero.slice(-2)}`);
 }
 
 async function seleccionarTipoCompraTienda(page, id) {
@@ -3760,38 +3835,33 @@ async function flujoTelcelTienda(ctx, id, datos) {
         sesion = await crearNavegadorTienda(id);
         page = sesion.page;
 
-        logTelcelTienda(id, `🌐 Navegando a ${URL_TELCEL_TIENDA}`);
+        logTelcelTienda(id, `🌐 [Telcel.com] Iniciando navegación...`);
+        const inicioCargaTienda = Date.now();
+
         await page.goto(URL_TELCEL_TIENDA, {
-            waitUntil: 'domcontentloaded',
-            timeout: 45000
+            waitUntil: 'commit',
+            timeout: 30000
         });
-        logTelcelTienda(id, `🌐 [Telcel.com] Página cargada`);
+
+        logTelcelTienda(
+            id,
+            `✅ [Telcel.com] Servidor respondió en ${Date.now() - inicioCargaTienda} ms`
+        );
 
         await page.waitForLoadState('domcontentloaded', {
-            timeout: 15000
-        }).catch(() => {});
-
-        await page.waitForLoadState('networkidle', {
-            timeout: 8000
-        }).catch(() => {});
+            timeout: 12000
+        }).catch(() => {
+            logTelcelTienda(
+                id,
+                '⚠️ [Telcel.com] DOMContentLoaded tardó; continuando por detección del formulario'
+            );
+        });
 
         await aceptarCookiesTienda(page);
 
-        console.log(`[Telcel.com Usuario ${id}] ⏳ Esperando formulario de recarga...`);
+        logTelcelTienda(id, '⏳ [Telcel.com] Esperando formulario Telcel...');
 
-        await page.waitForTimeout(2500);
-
-        await page.evaluate(async () => {
-            for (let y = 0; y <= 700; y += 175) {
-                window.scrollTo({
-                    top: y,
-                    behavior: 'smooth'
-                });
-                await new Promise(r => setTimeout(r, 250));
-            }
-        });
-
-        await page.waitForTimeout(800);
+        const inicioFormulario = Date.now();
 
         const tituloRecarga = page.getByText(
             'Recarga saldo o compra paquetes para tu Amigo',
@@ -3801,12 +3871,16 @@ async function flujoTelcelTienda(ctx, id, datos) {
         await tituloRecarga.waitFor({
             state: 'visible',
             timeout: 20000
-        }).catch(() => {});
+        });
 
-        if (await tituloRecarga.isVisible().catch(() => false)) {
-            await tituloRecarga.scrollIntoViewIfNeeded().catch(() => {});
-            await page.waitForTimeout(700);
-        }
+        logTelcelTienda(
+            id,
+            `✅ [Telcel.com] Formulario detectado en ${Date.now() - inicioFormulario} ms`
+        );
+
+        await tituloRecarga.scrollIntoViewIfNeeded().catch(() => {});
+
+        logTelcelTienda(id, '📱 [Telcel.com] Buscando campos de número...');
 
         // PASO 1: Ingresar número en ambas casillas
         await llenarNumeroTienda(page, numero, id);
@@ -4471,3 +4545,4 @@ function iniciarServidorYBot() {
 }
 
 iniciarServidorYBot();
+
