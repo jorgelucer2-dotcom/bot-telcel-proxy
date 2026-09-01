@@ -1420,48 +1420,182 @@ const aceptarCookiesBait = async (pag, id) => {
     } catch {}
 };
 
-// 5. APERTURA DE PAQUETE, MODAL, LLENADO Y AVANCE
+// 5. DETECCIÓN TEMPRANA DE ERROR BAIT VISIBLE
+async function detectarErrorBaitVisible(pag, id) {
+    if (!pag || (typeof pag.isClosed === 'function' && pag.isClosed())) return false;
+    try {
+        const errorDetectado = await pag.evaluate(() => {
+            const esVisible = el => {
+                if (!el) return false;
+                const s = window.getComputedStyle(el);
+                return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+            };
+
+            const patrones = [
+                'ocurrió un error, inténtalo de nuevo más tarde',
+                'ocurrio un error, intentalo de nuevo mas tarde',
+                'ocurrió un error',
+                'ocurrio un error',
+                'inténtalo de nuevo más tarde',
+                'intentalo de nuevo mas tarde'
+            ];
+
+            const selectores = ['dialog[open]', '.modal.show', '.alert', 'div[role="alert"]', 'div[role="dialog"]', '.swal2-modal', '.error', '.error-container', 'body'];
+            for (const sel of selectores) {
+                const els = document.querySelectorAll(sel);
+                for (const el of els) {
+                    if (sel === 'body' || esVisible(el)) {
+                        const t = (el.innerText || '').toLowerCase();
+                        for (const pat of patrones) {
+                            if (t.includes(pat)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }).catch(() => false);
+
+        if (errorDetectado) {
+            console.log(`⚠️ [Bait Usuario ${id}] ERROR_BAIT_TEMPORAL — portal BAIT respondió con error visible`);
+            return true;
+        }
+    } catch {}
+    return false;
+}
+
+// 5.1 APERTURA DE PAQUETE, MODAL, LLENADO Y AVANCE
 async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
-    await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // 1. Navegación inicial
+    await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await aceptarCookiesBait(pag, id);
 
-    const primerCard = pag.locator('app-card-recharge').first();
-    await primerCard.waitFor({ state: 'visible', timeout: 12000 });
-    await aceptarCookiesBait(pag, id);
+    // Comprobación temprana después de goto
+    if (await detectarErrorBaitVisible(pag, id)) {
+        const err = new Error("ERROR_BAIT_TEMPORAL");
+        err.codigo = "ERROR_BAIT_TEMPORAL";
+        throw err;
+    }
 
-    const selectoresCard = getSelectoresPaqueteBait(monto);
-    let cardBtn = null;
+    // 2. Esperar app-card-recharge con detección continua de error temporal
+    const tInicioHome = Date.now();
+    const TIMEOUT_HOME_MS = 12000;
+    let homeCargo = false;
 
-    for (const sel of selectoresCard) {
-        try {
-            const el = pag.locator(sel).first();
-            if (await el.isVisible({ timeout: 200 }).catch(() => false)) {
-                cardBtn = el;
+    while (Date.now() - tInicioHome < TIMEOUT_HOME_MS) {
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+
+        const countCards = await pag.locator('app-card-recharge').count().catch(() => 0);
+        if (countCards > 0) {
+            const primerCard = pag.locator('app-card-recharge').first();
+            if (await primerCard.isVisible({ timeout: 100 }).catch(() => false)) {
+                homeCargo = true;
                 break;
             }
-        } catch(e) {}
+        }
+        await aceptarCookiesBait(pag, id);
+        await pag.waitForTimeout(200);
+    }
+
+    if (!homeCargo) {
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+        const err = new Error("BAIT_HOME_NO_CARGO");
+        err.codigo = "BAIT_HOME_NO_CARGO";
+        throw err;
+    }
+
+    // 3. Localizar paquete de recarga ($300)
+    const selectoresCard = getSelectoresPaqueteBait(monto);
+    let cardBtn = null;
+    const tInicioPaquete = Date.now();
+    const TIMEOUT_PAQUETE_MS = 10000;
+
+    while (Date.now() - tInicioPaquete < TIMEOUT_PAQUETE_MS) {
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+
+        for (const sel of selectoresCard) {
+            try {
+                const el = pag.locator(sel).first();
+                if (await el.isVisible({ timeout: 80 }).catch(() => false)) {
+                    cardBtn = el;
+                    break;
+                }
+            } catch(e) {}
+        }
+        if (cardBtn) break;
+        await pag.waitForTimeout(200);
     }
 
     if (!cardBtn) {
-        cardBtn = pag.locator(`app-card-recharge:has(img[alt*="${monto}" i]) button, app-card-recharge:has(img[src*="${monto}"]) button, img[alt*="${monto}" i]`).first();
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+        const err = new Error("PAQUETE_BAIT_NO_VISIBLE");
+        err.codigo = "PAQUETE_BAIT_NO_VISIBLE";
+        throw err;
     }
 
-    await cardBtn.waitFor({ state: 'visible', timeout: 12000 });
     await cardBtn.scrollIntoViewIfNeeded().catch(() => {});
-    if (!(await cardBtn.isEnabled().catch(() => false))) {
-        throw new Error("BOTON_PAQUETE_BAIT_DESHABILITADO");
-    }
-    await cardBtn.click();
+    await cardBtn.click().catch(() => cardBtn.click({ force: true }));
 
-    // Detectar el modal real mediante dialog[open]
+    // 4. Detectar apertura del modal mediante dialog[open]
     const modal = pag.locator('dialog[open]').first();
-    await modal.waitFor({ state: 'visible', timeout: 15000 });
+    const tInicioModal = Date.now();
+    const TIMEOUT_MODAL_MS = 10000;
+    let modalAbierto = false;
 
-    // Llenar teléfono y correo
+    while (Date.now() - tInicioModal < TIMEOUT_MODAL_MS) {
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+        if (await modal.isVisible({ timeout: 80 }).catch(() => false)) {
+            modalAbierto = true;
+            break;
+        }
+        await pag.waitForTimeout(150);
+    }
+
+    if (!modalAbierto) {
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+        const err = new Error("MODAL_BAIT_NO_ABRIO");
+        err.codigo = "MODAL_BAIT_NO_ABRIO";
+        throw err;
+    }
+
+    // Comprobación de error visible después de abrir el modal
+    if (await detectarErrorBaitVisible(pag, id)) {
+        const err = new Error("ERROR_BAIT_TEMPORAL");
+        err.codigo = "ERROR_BAIT_TEMPORAL";
+        throw err;
+    }
+
+    // 5. Llenar teléfono y correo con tipeo de teclado
     const inputTel = modal.locator(BAIT_SEL.TEL).first();
     await inputTel.waitFor({ state: 'visible', timeout: 8000 });
     await inputTel.click({ force: true });
-    await inputTel.fill(numero, { force: true });
+    await inputTel.fill('');
+    await inputTel.pressSequentially(numero, { delay: 25 });
     await inputTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
     await inputTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
     await inputTel.dispatchEvent('blur', { bubbles: true }).catch(() => {});
@@ -1469,26 +1603,39 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
     const inputMail = modal.locator(BAIT_SEL.CORREO).first();
     await inputMail.waitFor({ state: 'visible', timeout: 8000 });
     await inputMail.click({ force: true });
-    await inputMail.fill(correo, { force: true });
+    await inputMail.fill('');
+    await inputMail.pressSequentially(correo, { delay: 15 });
     await inputMail.dispatchEvent('input', { bubbles: true }).catch(() => {});
     await inputMail.dispatchEvent('change', { bubbles: true }).catch(() => {});
     await inputMail.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-    await pag.waitForTimeout(600);
+    await pag.waitForTimeout(400);
 
-    // Detectar y esperar a que el botón de avance se habilite naturalmente
-    const inicioEspera = Date.now();
-    const TIMEOUT_AVANCE_MS = 18000;
+    // Comprobar error BAIT tras llenar datos
+    if (await detectarErrorBaitVisible(pag, id)) {
+        const err = new Error("ERROR_BAIT_TEMPORAL");
+        err.codigo = "ERROR_BAIT_TEMPORAL";
+        throw err;
+    }
+
+    // 6. Detectar y esperar a que el botón de avance se habilite naturalmente
+    const inicioEsperaAvance = Date.now();
+    const TIMEOUT_AVANCE_MS = 15000;
     let btnEncontrado = null;
-    let selectorExitoso = '';
+    let logueadoBotonDeshabilitado = false;
 
-    while (Date.now() - inicioEspera < TIMEOUT_AVANCE_MS) {
+    while (Date.now() - inicioEsperaAvance < TIMEOUT_AVANCE_MS) {
+        if (await detectarErrorBaitVisible(pag, id)) {
+            const err = new Error("ERROR_BAIT_TEMPORAL");
+            err.codigo = "ERROR_BAIT_TEMPORAL";
+            throw err;
+        }
+
         for (const sel of BAIT_SEL.BOTON_AVANCE_AMARILLO) {
             try {
                 const b = pag.locator(sel).first();
-                if (await b.isVisible({ timeout: 60 }).catch(() => false)) {
+                if (await b.isVisible({ timeout: 50 }).catch(() => false)) {
                     btnEncontrado = b;
-                    selectorExitoso = sel;
                     break;
                 }
             } catch(e) {}
@@ -1498,9 +1645,8 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
             for (const sel of BAIT_SEL.BOTON_AVANCE_NEGRO) {
                 try {
                     const b = modal.locator(sel).first();
-                    if (await b.isVisible({ timeout: 60 }).catch(() => false)) {
+                    if (await b.isVisible({ timeout: 50 }).catch(() => false)) {
                         btnEncontrado = b;
-                        selectorExitoso = sel;
                         break;
                     }
                 } catch(e) {}
@@ -1509,19 +1655,34 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
 
         if (btnEncontrado) {
             await btnEncontrado.scrollIntoViewIfNeeded().catch(() => {});
-            if (await btnEncontrado.isEnabled().catch(() => false)) {
+            const habilitado = await btnEncontrado.isEnabled().catch(() => false);
+            if (habilitado) {
                 await btnEncontrado.click();
-                await pag.waitForTimeout(800);
+                await pag.waitForTimeout(600);
                 return true;
+            } else {
+                if (!logueadoBotonDeshabilitado) {
+                    logueadoBotonDeshabilitado = true;
+                    console.log(`[Bait Usuario ${id}] BOTON_AVANCE_VISIBLE=true`);
+                    console.log(`[Bait Usuario ${id}] BOTON_AVANCE_ENABLED=false`);
+                }
+                // NO usar force:true para intentar saltarse un botón deshabilitado
+                btnEncontrado = null;
             }
-            // Si está visible pero aún no habilitado, no forzar clic y seguir esperando naturalmente
-            btnEncontrado = null;
         }
 
         await pag.waitForTimeout(150);
     }
 
-    throw new Error("FALLO_ABRIR_PAQUETE: Botón de avance deshabilitado o no interactivo");
+    if (await detectarErrorBaitVisible(pag, id)) {
+        const err = new Error("ERROR_BAIT_TEMPORAL");
+        err.codigo = "ERROR_BAIT_TEMPORAL";
+        throw err;
+    }
+
+    const err = new Error("BOTON_AVANCE_NO_HABILITADO");
+    err.codigo = "BOTON_AVANCE_NO_HABILITADO";
+    throw err;
 }
 
 function truncar(str, max = 180) {
@@ -1543,7 +1704,7 @@ function esFramePrerender(f) {
     return false;
 }
 
-// 5.1 ESPERA EXPLÍCITA Y DIAGNÓSTICO DE TRANSICIÓN INTERMEDIA (MÁXIMO 15s, POLLING: 250ms)
+// 5.2 ESPERA EXPLÍCITA Y DIAGNÓSTICO DE TRANSICIÓN INTERMEDIA (MÁXIMO 15s ESTRICTO, POLLING: 200ms)
 async function esperarFinPantallaIntermediaBait(pag, id) {
     const t0 = Date.now();
     const TIMEOUT_INTERMEDIO_MS = 15000;
@@ -1551,6 +1712,8 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
     let ultimoEstadoTransicion = '';
 
     while (Date.now() - t0 < TIMEOUT_INTERMEDIO_MS) {
+        if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
+
         const transcurrido = Date.now() - t0;
         const contexto = pag.context();
         const paginas = contexto && contexto.pages ? contexto.pages() : [pag];
@@ -1588,6 +1751,8 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
             return { estado: 'OK', pasarela: 'PAYPAL' };
         }
 
+        if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
+
         // 2. PRIORIDAD 2: COMPROBAR SI YA EXISTE UN FRAME ACTIVO DE CONEKTA
         let ckFrameActivo = false;
         for (const f of framesTotales) {
@@ -1607,7 +1772,21 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
             return { estado: 'OK', pasarela: 'CONEKTA' };
         }
 
-        // 3. PRIORIDAD 3: COMPROBAR SI EXISTE UN CONTENEDOR VISIBLE REAL DEL MODAL REGISTRA TU LÍNEA
+        if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
+
+        // 3. COMPROBACIÓN TEMPRANA DE ERROR BAIT VISIBLE DENTRO DE LA ESPERA INTERMEDIA
+        if (await detectarErrorBaitVisible(pag, id)) {
+            return {
+                estado: 'ERROR_BAIT_TEMPORAL',
+                subtipo: 'PORTAL_BAIT_NO_DISPONIBLE',
+                exito: false,
+                pagoConfirmado: false
+            };
+        }
+
+        if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
+
+        // 4. PRIORIDAD 4: COMPROBAR SI EXISTE UN CONTENEDOR VISIBLE REAL DEL MODAL REGISTRA TU LÍNEA
         const modalRealmenteVisible = await pag.evaluate(() => {
             const esVisible = el => {
                 if (!el) return false;
@@ -1644,9 +1823,12 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
                 console.log(`🌐 URL: ${truncar(urlActual)} | 📄 Páginas: ${numPags} | 🧩 Frames: ${numFrames}`);
             }
 
-            await pag.waitForTimeout(250);
+            if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
+            await pag.waitForTimeout(200);
             continue;
         }
+
+        if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
 
         // Si el modal estuvo visible y ahora desapareció
         if (modalRegistroDetectado && !modalRealmenteVisible) {
@@ -1683,7 +1865,7 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
             }
         }
 
-        // 4. TRANSICIÓN / CARGA GENERAL
+        // 5. TRANSICIÓN / CARGA GENERAL
         const estadoResumen = `modal=false|frms=${numFrames}`;
         if (estadoResumen !== ultimoEstadoTransicion) {
             ultimoEstadoTransicion = estadoResumen;
@@ -1691,10 +1873,11 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
             console.log(`🌐 URL: ${truncar(urlActual)} | 📄 Páginas: ${numPags} | 🧩 Frames: ${numFrames}`);
         }
 
-        await pag.waitForTimeout(250);
+        if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
+        await pag.waitForTimeout(200);
     }
 
-    // Si expira el timeout de 15s:
+    // Salida estricta a los 15s:
     const duracion = Date.now() - t0;
     const urlFinal = pag.url() || '';
     const framesFinales = pag.frames ? pag.frames().map(f => truncar(f.name(), 30)).filter(Boolean) : [];
@@ -2520,6 +2703,38 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
 
         // Esperar explícitamente a que termine la pantalla/modal intermedio antes de buscar la pasarela
         const resIntermedia = await esperarFinPantallaIntermediaBait(pag, id);
+
+        if (resIntermedia && resIntermedia.estado === 'ERROR_BAIT_TEMPORAL') {
+            console.log(`⚠️ [Bait Usuario ${id}] ERROR_BAIT_TEMPORAL — portal BAIT respondió con error visible. Omitiendo detección de pasarela.`);
+            let capturaDiag = null;
+            if (pag && !pag.isClosed()) {
+                try { capturaDiag = await tomarCapturaEnfocada(pag); } catch(e) {}
+            }
+            await cerrarContextoBait(contexto, id);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pasarelaDetectada: false,
+                pag: null,
+                contexto: null,
+                captura: capturaDiag,
+                datos: datosCompletos,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'ERROR_BAIT_TEMPORAL',
+                        subtipo: 'PORTAL_BAIT_NO_DISPONIBLE',
+                        titulo: '⚠️ ERROR TEMPORAL EN PORTAL BAIT',
+                        icono: '⚠️',
+                        explicacion: 'El portal BAIT respondió con mensaje de error ("Ocurrió un error, inténtalo de nuevo más tarde").'
+                    },
+                    textoLeido: 'ERROR_BAIT_TEMPORAL'
+                }
+            };
+        }
+
         if (resIntermedia && resIntermedia.estado === 'MODAL_REGISTRO_ATASCADO') {
             let capturaDiag = null;
             if (pag && !pag.isClosed()) {
@@ -2529,9 +2744,9 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
             return {
                 exito: false,
                 pagoConfirmado: false,
-                pasarelaDetectada: true,
+                pasarelaDetectada: false,
                 pag: null,
-                contexto,
+                contexto: null,
                 captura: capturaDiag,
                 datos: datosCompletos,
                 resultado: {
@@ -2560,7 +2775,7 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
             const resultadoFinalBait = await paso3DiagnosticoYElementosPayPalBait(pag, id, datosCompletos, monto);
             return {
                 exito: resultadoFinalBait.exito,
-                pagoConfirmado: false,
+                pagoConfirmado: Boolean(resultadoFinalBait && resultadoFinalBait.pagoConfirmado),
                 pag,
                 contexto,
                 datos: datosCompletos,
@@ -2631,13 +2846,146 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
         }
 
     } catch (err) {
+        let capturaError = null;
+        if (pag && !pag.isClosed()) {
+            try { capturaError = await tomarCapturaEnfocada(pag); } catch(e) {}
+        }
+        await cerrarContextoBait(contexto, id);
+
+        const codigoError = err.codigo || err.message || '';
+
+        if (codigoError.includes('ERROR_BAIT_TEMPORAL')) {
+            console.log(`⚠️ [Bait Usuario ${id}] ERROR_BAIT_TEMPORAL — portal BAIT respondió con error visible (Intento ${intento}/${MAX_RETRIES_BAIT})`);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pag: null,
+                contexto: null,
+                captura: capturaError,
+                datos: datosCompletos,
+                pasarelaDetectada: false,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'ERROR_BAIT_TEMPORAL',
+                        subtipo: 'PORTAL_BAIT_NO_DISPONIBLE',
+                        titulo: '⚠️ ERROR TEMPORAL EN PORTAL BAIT',
+                        icono: '⚠️',
+                        explicacion: 'El portal BAIT mostró un error temporal de servicio ("Ocurrió un error, inténtalo de nuevo más tarde").'
+                    },
+                    textoLeido: 'ERROR_BAIT_TEMPORAL'
+                }
+            };
+        }
+
+        if (codigoError.includes('BAIT_HOME_NO_CARGO')) {
+            console.log(`⚠️ [Bait Usuario ${id}] BAIT_HOME_NO_CARGO — la página de inicio de BAIT no cargó (Intento ${intento}/${MAX_RETRIES_BAIT})`);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pag: null,
+                contexto: null,
+                captura: capturaError,
+                datos: datosCompletos,
+                pasarelaDetectada: false,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'BAIT_HOME_NO_CARGO',
+                        subtipo: 'HOME_TIMEOUT',
+                        titulo: '⏱️ LA PÁGINA DE BAIT NO CARGÓ',
+                        icono: '⏱️',
+                        explicacion: 'No se pudo cargar la página principal de recargas de BAIT.'
+                    },
+                    textoLeido: 'BAIT_HOME_NO_CARGO'
+                }
+            };
+        }
+
+        if (codigoError.includes('PAQUETE_BAIT_NO_VISIBLE')) {
+            console.log(`⚠️ [Bait Usuario ${id}] PAQUETE_BAIT_NO_VISIBLE — el paquete $${monto} no apareció en pantalla (Intento ${intento}/${MAX_RETRIES_BAIT})`);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pag: null,
+                contexto: null,
+                captura: capturaError,
+                datos: datosCompletos,
+                pasarelaDetectada: false,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'PAQUETE_BAIT_NO_VISIBLE',
+                        subtipo: 'PAQUETE_NO_ENCONTRADO',
+                        titulo: '⚠️ PAQUETE NO ENCONTRADO EN BAIT',
+                        icono: '⚠️',
+                        explicacion: `No se encontró el botón del paquete de $${monto} MXN en la página.`
+                    },
+                    textoLeido: 'PAQUETE_BAIT_NO_VISIBLE'
+                }
+            };
+        }
+
+        if (codigoError.includes('MODAL_BAIT_NO_ABRIO')) {
+            console.log(`⚠️ [Bait Usuario ${id}] MODAL_BAIT_NO_ABRIO — el diálogo de datos de línea no abrió (Intento ${intento}/${MAX_RETRIES_BAIT})`);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pag: null,
+                contexto: null,
+                captura: capturaError,
+                datos: datosCompletos,
+                pasarelaDetectada: false,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'MODAL_BAIT_NO_ABRIO',
+                        subtipo: 'MODAL_NO_RESPONDE',
+                        titulo: '⚠️ DIÁLOGO DE BAIT NO RESPONDIÓ',
+                        icono: '⚠️',
+                        explicacion: 'No se abrió el formulario de ingreso de línea tras hacer clic en el paquete.'
+                    },
+                    textoLeido: 'MODAL_BAIT_NO_ABRIO'
+                }
+            };
+        }
+
+        if (codigoError.includes('BOTON_AVANCE_NO_HABILITADO')) {
+            console.log(`⚠️ [Bait Usuario ${id}] BOTON_AVANCE_NO_HABILITADO — el botón Continuar al pago no se habilitó (Intento ${intento}/${MAX_RETRIES_BAIT})`);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pag: null,
+                contexto: null,
+                captura: capturaError,
+                datos: datosCompletos,
+                pasarelaDetectada: false,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'BOTON_AVANCE_NO_HABILITADO',
+                        subtipo: 'AVANCE_DESHABILITADO',
+                        titulo: '⚠️ BOTÓN DE AVANCE NO HABILITADO',
+                        icono: '⚠️',
+                        explicacion: 'El botón para continuar al pago permaneció deshabilitado tras ingresar los datos.'
+                    },
+                    textoLeido: 'BOTON_AVANCE_NO_HABILITADO'
+                }
+            };
+        }
+
         if (pasarelaDetectada && pag && !pag.isClosed()) {
             console.log(`[Bait Usuario ${id}] ⚠️ Error posterior a detectar PayPal: ${err.message}. Retornando ERROR_POST_PAYPAL.`);
-            let captura = null;
-            try {
-                captura = await tomarCapturaEnfocada(pag);
-            } catch(e) {}
-
             return {
                 exito: false,
                 pagoConfirmado: false,
@@ -2657,15 +3005,10 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
                     },
                     textoLeido: err.message || 'Error técnico en pasarela'
                 },
-                captura
+                captura: capturaError
             };
         }
 
-        let capturaError = null;
-        if (pag && !pag.isClosed()) {
-            capturaError = await tomarCapturaEnfocada(pag);
-        }
-        await cerrarContextoBait(contexto, id);
         console.log(`🧹 [Bait Usuario ${id}] Contexto cerrado tras excepción: ${err.message || err}`);
         return { exito: false, pagoConfirmado: false, pag: null, error: err, captura: capturaError, pasarelaDetectada: false };
     }
@@ -2750,7 +3093,7 @@ async function flujoBait(ctx, id, datos) {
                     await ctx.replyWithHTML(captionFinal);
                 }
 
-            } else if (clasif.estado === 'PASARELA_NO_ADMITIDA' || clasif.estado === 'CONEKTA_DETECTADO' || clasif.estado === 'PASARELA_NO_DETERMINADA' || clasif.estado === 'PASARELA_TIMEOUT') {
+            } else if (['PASARELA_NO_ADMITIDA', 'CONEKTA_DETECTADO', 'PASARELA_NO_DETERMINADA', 'PASARELA_TIMEOUT', 'ERROR_BAIT_TEMPORAL', 'BAIT_HOME_NO_CARGO', 'PAQUETE_BAIT_NO_VISIBLE', 'MODAL_BAIT_NO_ABRIO', 'BOTON_AVANCE_NO_HABILITADO'].includes(clasif.estado)) {
                 const s = sesiones.get(id) || {};
                 const ult4 = s.ult4 || (s.tarjeta ? s.tarjeta.slice(-4) : '****');
 
@@ -3440,5 +3783,3 @@ function iniciarServidorYBot() {
 }
 
 iniciarServidorYBot();
-
-
