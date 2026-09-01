@@ -29,6 +29,7 @@ const USE_LOCAL_CHROMIUM = process.env.USE_LOCAL_CHROMIUM === 'true';
 const ES_HEADLESS = process.env.RENDER === 'true' || process.env.HEADLESS === 'true' || (process.platform === 'linux' && process.env.HEADLESS !== 'false');
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PUERTO}`;
 const MAX_RETRIES_BAIT = 5;
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '';
 
 if (!BOT_TOKEN) {
     console.error("❌ ERROR: La variable de entorno BOT_TOKEN no está configurada.");
@@ -384,7 +385,7 @@ function extraerFragmentoClave(texto) {
     if (!texto) return "Sin texto de alerta capturado";
     const lineas = texto.split('\n')
         .map(l => l.trim())
-        .filter(l => l.length > 5 && !/^(telcel|bait|recargas|paquetes|aviso de privacidad|términos|todos los derechos|ingresa tu|número amigo)/i.test(l));
+        .filter(l => l.length > 5 && !/^(telcel|bait|recargas|paquetes|aviso de privacidad|términos|todos los derechos|ingresa tu|número amigo|mi bait|duración|obtén internet|una vez consumidos|datos de línea|para registrar|ingresa los datos)/i.test(l));
     return lineas.slice(0, 3).join(' | ').slice(0, 180) || texto.slice(0, 140);
 }
 
@@ -401,30 +402,22 @@ function clasificarResultadoBait(textoVisibleLimpio, id) {
 
     const txt = textoVisibleLimpio.toLowerCase();
 
-    // 1️⃣ PRIORIDAD MÁXIMA: RECHAZOS BANCARIOS Y FONDOS INSUFICIENTES (Evaluados primero)
+    // 1️⃣ PRIORIDAD MÁXIMA: RECHAZOS BANCARIOS, FONDOS INSUFICIENTES Y ERROR AL COMPLETAR PAGO / ERROR INTERNO
+    const esErrorInternoOPago = /(error\s*al\s*completar\s*(tu|su)?\s*pago)|(se\s*ha\s*producido\s*un\s*error\s*interno)|(error\s*interno)|(int[ée]ntelo\s*de\s*nuevo\s*m[áa]s\s*tarde)|(int[ée]ntalo\s*(de\s*nuevo\s*)?m[áa]s\s*tarde)|(no\s*se\s*pudo\s*completar\s*tu\s*pago)/i.test(txt);
+
     const esFondos = /(fondos\s*insuficientes)|(saldo\s*insuficiente)|(saldo\s*no\s*disponible)|(sin\s*fondos)|(monto\s*no\s*adecuado)|(monto\s*insuficiente)|(no\s*cuenta\s*con\s*fondos)/i.test(txt);
     
     const esTarjetaRechazada = /(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|rechazada|no\s*soportada|no\s*aceptada|no\s*permitida|declinada))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(cvv\s*incorrecto)|(fecha\s*de\s*vencimiento\s*inv[áa]lida)|(vencimiento\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(tipo\s*de\s*tarjeta\s*no\s*v[áa]lida)|(entidad\s*rechaz[óo])|(bloqueo\s*por\s*seguridad)|(l[íi]mite\s*diario)|(no\s*autorizada\s*por\s*el\s*banco)|(rechazada\s*por\s*el\s*banco)|(intenta\s*con\s*otra\s*tarjeta)|(intente\s*con\s*otra\s*tarjeta)|(consulte\s*con\s*el\s*emisor)|(transacci[óo]n\s*no\s*autorizada)|(no\s*se\s*pudo\s*procesar\s*su\s*pago)|(no\s*se\s*pudo\s*completar\s*el\s*pago)|(pago\s*no\s*autorizado)|(operaci[óo]n\s*declinada)|(pago\s*declinado)/i.test(txt);
 
     const esErrorGenericoBanco = /(tu\s*solicitud\s*no\s*pudo\s*ser\s*(completada|procesada))|(no\s*se\s*pudo\s*realizar\s*(el\s*pago|la\s*operaci[óo]n))|(transacci[óo]n\s*rechazada)|(pago\s*rechazado)|(error\s*al\s*procesar\s*el\s*pago)|(pago\s*no\s*aplicado)|(cobro\s*rechazado)|(lo\s*sentimos,?\s*no\s*pudimos\s*procesar)/i.test(txt);
 
-    if (esFondos) {
+    if (esErrorInternoOPago || esFondos || esTarjetaRechazada || esErrorGenericoBanco) {
         return {
             estado: 'RECHAZO_BANCARIO',
-            subtipo: 'FONDOS_INSUFICIENTES',
-            titulo: '❌ RECARGA NO COMPLETADA: FONDOS / MONTO INSUFICIENTE',
-            icono: '💸',
-            explicacion: 'La tarjeta no cuenta con fondos suficientes o el monto fue declinado por el banco emisor.'
-        };
-    }
-
-    if (esTarjetaRechazada || esErrorGenericoBanco) {
-        return {
-            estado: 'RECHAZO_BANCARIO',
-            subtipo: 'TARJETA_DECLINADA',
-            titulo: '❌ RECARGA NO COMPLETADA: TRANSACCIÓN DECLINADA',
+            subtipo: 'FORMA_PAGO_RECHAZADA',
+            titulo: '❌ RECARGA NO COMPLETADA: PAGO RECHAZADO O SIN FONDOS',
             icono: '💳',
-            explicacion: 'El banco emisor declinó la transacción o rechazó la tarjeta ingresada.'
+            explicacion: 'Tu forma de pago rechazó el cargo o no cuenta con fondos suficientes.'
         };
     }
 
@@ -441,7 +434,7 @@ function clasificarResultadoBait(textoVisibleLimpio, id) {
     }
 
     // 3️⃣ EN PROCESO / PENDIENTE (JAMÁS SE CONSIDERA ÉXITO)
-    const esProcesando = /(tu\s*recarga\s*est[áa]\s*en\s*proceso)|(recarga\s*en\s*proceso)|(pago\s*en\s*proceso)|(procesando\s*tu\s*(pago|recarga))|(espera\s*la\s*confirmaci[óo]n)|(estamos\s*procesando\s*tu\s*solicitud)|(validando\s*transacci[óo]n)|(en\s*validaci[óo]n)|(transacci[óo]n\s*pendiente)/i.test(txt);
+    const esProcesando = /(tu\s*recarga\s*est[áa]\s*en\s*proceso)|(recarga\s*en\s*proceso)|(pago\s*en\s*proceso)|(procesando\s*tu\s*(pago|recarga|solicitud))|(espera\s*la\s*confirmaci[óo]n)|(estamos\s*procesando\s*tu\s*solicitud)|(validando\s*transacci[óo]n)|(en\s*validaci[óo]n)|(transacci[óo]n\s*pendiente)|(procesando)|(en\s*proceso)|(validando)|(pendiente)/i.test(txt);
 
     if (esProcesando) {
         return {
@@ -457,7 +450,10 @@ function clasificarResultadoBait(textoVisibleLimpio, id) {
     const tieneFolioOComprobante = /(folio:?\s*#?\s*\w+)|(comprobante\s*de\s*(pago|recarga|compra))|(ticket\s*de\s*(compra|pago|recarga))|(n[úu]mero\s*de\s*autorizaci[óo]n:?\s*\w+)|(c[óo]digo\s*de\s*aprobaci[óo]n)/i.test(txt);
     const esAprobacionExplicita = /(¡?recarga\s*exitosa!?)|(¡?pago\s*(exitoso|aprobado|aplicado)!?)|(transacci[óo]n\s*(exitosa|aprobada))|(tu\s*pago\s*ha\s*sido\s*(aprobado|aplicado|procesado\s*con\s*[ée]xito))|(¡?tu\s*recarga\s*fue\s*exitosa!?)|(¡?recarga\s*aplicada!?)|(¡listo!\s*tu\s*recarga)/i.test(txt);
 
-    if (tieneFolioOComprobante || (esAprobacionExplicita && !/(en\s*proceso|pendiente|iniciad[oa]|error|rechaz)/i.test(txt))) {
+    // Evitar falsos positivos por textos internos de diagnóstico
+    const esTextoDiagnostico = /checkout\s*(confirmado|listo)|paypal_card_checkout|card_form_visible/i.test(txt);
+
+    if (!esTextoDiagnostico && (tieneFolioOComprobante || (esAprobacionExplicita && !/(en\s*proceso|pendiente|procesando|validando|iniciad[oa]|error|rechaz)/i.test(txt)))) {
         return {
             estado: 'EXITO',
             subtipo: 'EXITOSO',
@@ -478,7 +474,7 @@ function clasificarResultadoBait(textoVisibleLimpio, id) {
 }
 
 // ==============================================================================
-// 🧠 2.4 CLASIFICADOR INTELIGENTE TELCEL (ORDEN ESTRICTO: RECHAZO -> BLOQUEO -> PROCESANDO -> EXITO -> DESCONOCIDO)
+// 🧠 2.4 CLASIFICADOR INTELIGENTE TELCEL (ORDEN ESTRICTO: RECHAZO -> BLOQUEO -> ERROR_TELCEL -> PROCESANDO -> EXITO -> DESCONOCIDO)
 // ==============================================================================
 function clasificarResultadoTelcel(textoCompleto, id) {
     if (!textoCompleto || typeof textoCompleto !== 'string') {
@@ -493,10 +489,10 @@ function clasificarResultadoTelcel(textoCompleto, id) {
 
     const txt = textoCompleto.toLowerCase();
 
-    // 1️⃣ PRIORIDAD MÁXIMA: RECHAZO BANCARIO Y FONDOS INSUFICIENTES (Gana siempre sobre éxito)
+    // 1️⃣ PRIORIDAD MÁXIMA: RECHAZO BANCARIO Y FONDOS INSUFICIENTES EXPLÍCITOS (Gana siempre sobre éxito)
     const esFondos = /(fondos\s*insuficientes)|(saldo\s*insuficiente)|(saldo\s*no\s*disponible)|(sin\s*fondos)|(monto\s*no\s*adecuado)|(monto\s*insuficiente)|(no\s*cuenta\s*con\s*fondos)|(no\s*tiene\s*fondos)/i.test(txt);
     
-    const esTarjetaRechazada = /(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|rechazada|no\s*soportada|no\s*aceptada|no\s*reconocida|no\s*permitida|declinada))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(cvv\s*incorrecto)|(fecha\s*de\s*vencimiento\s*inv[áa]lida)|(vencimiento\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(tipo\s*de\s*tarjeta\s*no\s*v[áa]lida)|(revisa\s*el\s*n[úu]mero\s*de\s*tarjeta)|(bin\s*(inv[áa]lido|no\s*v[áa]lido|no\s*soportado))|(entidad\s*rechaz[óo])|(no\s*autorizada\s*por\s*el\s*banco)|(rechazada\s*por\s*el\s*banco)|(intenta\s*con\s*otra\s*tarjeta)|(intente\s*con\s*otra\s*tarjeta)|(consulte\s*con\s*el\s*emisor)|(transacci[óo]n\s*no\s*autorizada)|(no\s*se\s*pudo\s*procesar\s*su\s*pago)|(no\s*se\s*pudo\s*completar\s*el\s*pago)|(pago\s*no\s*autorizado)|(operaci[óo]n\s*declinada)|(pago\s*declinado)/i.test(txt);
+    const esTarjetaRechazada = /(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|rechazada|no\s*soportada|no\s*aceptada|no\s*reconocida|no\s*permitida|declinada))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(cvv\s*incorrecto)|(fecha\s*de\s*vencimiento\s*inv[áa]lida)|(vencimiento\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(tipo\s*de\s*tarjeta\s*no\s*v[áa]lida)|(revisa\s*el\s*n[úu]mero\s*de\s*tarjeta)|(bin\s*(inv[áa]lido|no\s*v[áa]lido|no\s*soportado))|(entidad\s*rechaz[óo])|(no\s*autorizada\s*por\s*el\s*banco)|(rechazada\s*por\s*el\s*banco)|(intenta\s*con\s*otra\s*tarjeta)|(intente\s*con\s*otra\s*tarjeta)|(consulte\s*con\s*el\s*emisor)|(transacci[óo]n\s*no\s*autorizada)|(no\s*se\s*pudo\s*procesar\s*su\s*pago)|(pago\s*no\s*autorizado)|(operaci[óo]n\s*declinada)|(pago\s*declinado)|(cobro\s*rechazado)|(transacci[óo]n\s*rechazada)|(pago\s*rechazado)/i.test(txt);
 
     if (esFondos) {
         return {
@@ -518,37 +514,32 @@ function clasificarResultadoTelcel(textoCompleto, id) {
         };
     }
 
-    // 2️⃣ BLOQUEO TELCEL / RESTRICCIÓN / ERROR GENÉRICO
-    const esBloqueoTelcel = /(bloqueo\s*por\s*seguridad)|(l[íi]mite\s*diario)|(l[íi]mite\s*de\s*intentos)|(excediste\s*el\s*l[íi]mite)|(int[ée]ntalo\s*m[áa]s\s*tarde)|(transacci[óo]n\s*bloqueada)/i.test(txt);
-    const esGenericoTelcel = /(tu\s*solicitud\s*no\s*pudo\s*ser\s*(completada|procesada))|(no\s*se\s*pudo\s*realizar\s*(el\s*pago|la\s*operaci[óo]n))|(transacci[óo]n\s*rechazada)|(pago\s*rechazado)|(error\s*al\s*procesar)|(hubo\s*un\s*problema\s*al\s*procesar)|(pago\s*no\s*aplicado)|(cobro\s*rechazado)/i.test(txt);
-
-    const historial = historialErroresUsuario.get(id) || [];
-    const errorActualLimpio = textoCompleto.trim().replace(/\s+/g, ' ').slice(0, 100);
-    const esRepetido = historial.some(e => e && e.length > 10 && errorActualLimpio.includes(e.slice(0, 30)));
-    historial.push(errorActualLimpio);
-    historialErroresUsuario.set(id, historial);
-
-    if (esBloqueoTelcel || (esGenericoTelcel && esRepetido)) {
+    // 2️⃣ BLOQUEO EXPLÍCITO TELCEL (Texto visible explícito: bloqueo por seguridad, límites)
+    const esBloqueoTelcel = /(bloqueo\s*por\s*seguridad)|(l[íi]mite\s*de\s*intentos)|(excediste\s*el\s*l[íi]mite)|(l[íi]mite\s*diario)|(transacci[óo]n\s*bloqueada)|(operaci[óo]n\s*bloqueada)/i.test(txt);
+    if (esBloqueoTelcel) {
         return {
             estado: 'BLOQUEO_TELCEL',
-            subtipo: 'POSIBLE_LISTA_NEGRA',
-            titulo: '⛔ POSIBLE BLOQUEO TELCEL / LISTA NEGRA',
+            subtipo: 'BLOQUEO_SEGURIDAD',
+            titulo: '⛔ TRANSACCIÓN BLOQUEADA POR TELCEL',
             icono: '⛔',
-            explicacion: 'Restricción de la plataforma Telcel por uso repetido, IP o filtro de riesgo.'
+            explicacion: 'La plataforma Telcel bloqueó la operación por límite de intentos o seguridad.'
         };
     }
 
-    if (esGenericoTelcel) {
+    // 3️⃣ ERROR GENÉRICO / TEMPORAL DE TELCEL (No es rechazo bancario ni lista negra)
+    const esErrorGenericoTelcel = /(tu\s*solicitud\s*no\s*pudo\s*ser\s*(completada|procesada))|(esta\s*operaci[óo]n\s*no\s*pudo\s*ser\s*completada)|(no\s*pudo\s*ser\s*completada)|(por\s*favor,?\s*int[ée]ntalo\s*m[áa]s\s*tarde)|(int[ée]ntalo\s*m[áa]s\s*tarde)|(intente\s*m[áa]s\s*tarde)|(no\s*se\s*pudo\s*realizar\s*(el\s*pago|la\s*operaci[óo]n))|(error\s*al\s*procesar)|(hubo\s*un\s*problema\s*al\s*procesar)|(pago\s*no\s*aplicado)/i.test(txt);
+
+    if (esErrorGenericoTelcel) {
         return {
-            estado: 'RECHAZO_BANCARIO',
-            subtipo: 'ERROR_TRANSACCION',
-            titulo: '❌ RECARGA NO COMPLETADA: PAGO NO PROCESADO',
-            icono: '💳',
-            explicacion: 'La plataforma no pudo procesar el cobro con la tarjeta proporcionada.'
+            estado: 'ERROR_TELCEL',
+            subtipo: 'ERROR_TEMPORAL',
+            titulo: '⚠️ TELCEL NO PUDO COMPLETAR LA OPERACIÓN',
+            icono: '🟡',
+            explicacion: 'Telcel no pudo completar la operación. El portal no informó una causa definitiva.'
         };
     }
 
-    // 3️⃣ PROCESANDO / PENDIENTE (JAMÁS SE CONSIDERA ÉXITO)
+    // 4️⃣ PROCESANDO / PENDIENTE (JAMÁS SE CONSIDERA ÉXITO)
     const esProcesando = /(tu\s*recarga\s*est[áa]\s*en\s*proceso)|(recarga\s*en\s*proceso)|(procesando\s*tu\s*(pago|recarga|solicitud))|(espera\s*un\s*momento)|(validando\s*transacci[óo]n)|(en\s*validaci[óo]n)|(transacci[óo]n\s*en\s*proceso)/i.test(txt);
     if (esProcesando) {
         return {
@@ -560,7 +551,7 @@ function clasificarResultadoTelcel(textoCompleto, id) {
         };
     }
 
-    // 4️⃣ ÉXITO REAL (Exigir confirmación final explícita de recarga/pago exitoso)
+    // 5️⃣ ÉXITO REAL (Exigir confirmación final explícita de recarga/pago exitoso)
     const tieneFolioOComprobante = /(folio:?\s*#?\s*\d+)|(folio\s*de\s*recarga:?\s*\d+)|(n[úu]mero\s*de\s*autorizaci[óo]n:?\s*\d+)/i.test(txt);
     const esExitoExplicito = /(¡?recarga\s*exitosa!?)|(¡?pago\s*exitoso!?)|(¡?tu\s*recarga\s*fue\s*exitosa!?)|(tu\s*pago\s*ha\s*sido\s*(exitoso|aplicado\s*con\s*[ée]xito))|(¡listo!\s*tu\s*recarga)|(recarga\s*aplicada\s*con\s*[ée]xito)|(transacci[óo]n\s*exitosa)/i.test(txt);
 
@@ -574,7 +565,7 @@ function clasificarResultadoTelcel(textoCompleto, id) {
         };
     }
 
-    // 5️⃣ ESTADO NO DETERMINADO
+    // 6️⃣ ESTADO NO DETERMINADO
     return {
         estado: 'DESCONOCIDO',
         subtipo: 'ERROR_TEMPORAL',
@@ -585,8 +576,12 @@ function clasificarResultadoTelcel(textoCompleto, id) {
 }
 
 // ==============================================================================
-// 🌐 3. NAVEGADOR TELCEL
+// 🌐 3. NAVEGADOR TELCEL Y LOGS DE DIAGNÓSTICO
 // ==============================================================================
+function logTelcel(id, mensaje) {
+    console.log(`[Telcel Usuario ${id}] ${mensaje}`);
+}
+
 async function lanzarNavegador(id) {
     await cerrarSesionNavegador(id);
 
@@ -676,14 +671,26 @@ async function aceptarUbicacionSiAparece(pagina) {
 // ==============================================================================
 // 📦 4. FUNCIONES MODULARES DE PAQUETES (TELCEL)
 // ==============================================================================
-async function abrirMasPaquetes(pagina, monto) {
+async function abrirMasPaquetes(pagina, monto, id = '') {
+    const tInicio = Date.now();
+    logTelcel(id, `📦 Buscando paquetes...`);
+
+    let t = Date.now();
     await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    logTelcel(id, `⏱️ Espera inicial networkidle: ${Date.now() - t} ms`);
 
     const botonVerMas = pagina.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")');
-    if (await botonVerMas.isVisible({ timeout: 4000 }).catch(() => false)) {
+    t = Date.now();
+    const esVisible = await botonVerMas.isVisible({ timeout: 4000 }).catch(() => false);
+    logTelcel(id, `⏱️ Comprobación visibilidad 'Ver más paquetes': ${Date.now() - t} ms (visible: ${esVisible})`);
+
+    if (esVisible) {
+        logTelcel(id, `📦 Abriendo Ver más paquetes`);
+        t = Date.now();
         await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
         await botonVerMas.click({ force: true }).catch(() => {});
         await pagina.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+        logTelcel(id, `✅ 'Ver más paquetes' clickeado y networkidle: ${Date.now() - t} ms`);
     }
 
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
@@ -691,30 +698,49 @@ async function abrirMasPaquetes(pagina, monto) {
         .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
         .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
 
+    t = Date.now();
+    logTelcel(id, `🔍 Esperando tarjeta paquete $${monto} (attached)...`);
     await tarjetaEsperada.waitFor({ state: 'attached', timeout: 25000 }).catch(() => {});
+    logTelcel(id, `✅ Tarjeta paquete $${monto} attached en ${Date.now() - t} ms (Total abrirMasPaquetes: ${Date.now() - tInicio} ms)`);
 }
 
-async function seleccionarPaquete(pagina, monto) {
+async function seleccionarPaquete(pagina, monto, id = '') {
+    const tInicio = Date.now();
+    logTelcel(id, `🔍 Buscando paquete $${monto}`);
+
+    let t = Date.now();
     await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    logTelcel(id, `⏱️ Espera networkidle antes de seleccionar: ${Date.now() - t} ms`);
 
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
     const tarjeta = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
         .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
         .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
 
+    t = Date.now();
     await tarjeta.waitFor({ state: 'attached', timeout: 20000 });
+    logTelcel(id, `⏱️ Tarjeta attached: ${Date.now() - t} ms`);
+
+    t = Date.now();
     await tarjeta.waitFor({ state: 'visible', timeout: 20000 });
+    logTelcel(id, `✅ Paquete $${monto} encontrado (visible en ${Date.now() - t} ms)`);
 
     const botonLoQuiero = tarjeta.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero"), button:has-text("Lo quiero")');
     await botonLoQuiero.scrollIntoViewIfNeeded().catch(() => {});
+
+    t = Date.now();
     await botonLoQuiero.waitFor({ state: 'visible', timeout: 15000 });
+    logTelcel(id, `⏱️ Botón 'Lo quiero' visible: ${Date.now() - t} ms`);
 
     if (!(await botonLoQuiero.isEnabled().catch(() => false))) {
         throw new Error(`BOTON_LO_QUIERO_$${monto}_NO_HABILITADO`);
     }
 
+    logTelcel(id, `🖱️ Seleccionando paquete $${monto}`);
+    t = Date.now();
     await botonLoQuiero.click({ force: true });
     await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    logTelcel(id, `✅ Paquete seleccionado en ${Date.now() - t} ms (Total seleccionarPaquete: ${Date.now() - tInicio} ms)`);
 }
 
 async function ejecutarConReintento(fn, intentosMax = 3, id) {
@@ -739,6 +765,8 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
     const { numero, cc, mes, anio, anioCompleto, cvv, nombre, monto: montoIn } = datos;
     const monto = montoIn || 200;
 
+    logTelcel(id, `🚀 Iniciando flujo Telcel (Monto: $${monto}, Línea: ${numero.slice(0, 3)}***${numero.slice(-3)})`);
+
     await enviarLimpio(ctx,
         `🦁 <b>BOT LEÓN — PROCESANDO TELCEL</b> 🤖\n` +
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -752,17 +780,22 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
     let ultimaEtapa = "Inicialización";
 
     try {
-        await ejecutarConReintento(async () => {
+        await ejecutarConReintento(async (intento) => {
             const miId = (ejecucionesUsuario.get(id) || 0) + 1;
             ejecucionesUsuario.set(id, miId);
+
+            logTelcel(id, `🔄 Intento Telcel ${intento}/3`);
 
             let sesion = null;
             let pagina = null;
 
             try {
                 ultimaEtapa = "Apertura de navegador";
+                logTelcel(id, `🌐 Abriendo navegador`);
+                let t = Date.now();
                 sesion = await lanzarNavegador(id);
                 pagina = sesion.pagina;
+                logTelcel(id, `✅ Navegador abierto en ${Date.now() - t} ms`);
 
                 pagina.on('dialog', async dialog => {
                     await dialog.accept().catch(() => {});
@@ -774,19 +807,26 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 });
 
                 ultimaEtapa = "Navegación a Telcel Pay";
+                logTelcel(id, `🌐 Navegando a Telcel Pay (${URL_TELCEL})`);
+                t = Date.now();
                 await pagina.goto(URL_TELCEL, { waitUntil: 'commit', timeout: 45000 });
                 await pagina.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
                 await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+                logTelcel(id, `✅ Página Telcel cargada en ${Date.now() - t} ms`);
 
-                await aceptarUbicacionSiAparece(pagina);
+                t = Date.now();
+                const ubicacionAceptada = await aceptarUbicacionSiAparece(pagina);
+                logTelcel(id, `📍 Permiso de ubicación configurado/verificado (${Date.now() - t} ms, aceptado: ${ubicacionAceptada})`);
 
                 ultimaEtapa = "Apertura de paquetes adicionales";
-                await abrirMasPaquetes(pagina, monto);
+                await abrirMasPaquetes(pagina, monto, id);
 
                 ultimaEtapa = `Selección de paquete $${monto}`;
-                await seleccionarPaquete(pagina, monto);
+                await seleccionarPaquete(pagina, monto, id);
 
                 ultimaEtapa = "Ingreso de número celular";
+                logTelcel(id, `📱 Buscando campo de número`);
+                t = Date.now();
                 const inputNumeroSel = 'input#id-phone-p';
                 const campoTel = pagina.locator(inputNumeroSel).first();
                 await campoTel.waitFor({ state: 'attached', timeout: 25000 });
@@ -808,21 +848,30 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     return el && el.value === num;
                 }, { sel: inputNumeroSel, num: numero }, { timeout: 10000 }).catch(() => {});
 
+                logTelcel(id, `✅ Número ingresado en ${Date.now() - t} ms`);
+
+                logTelcel(id, `➡️ Continuando a forma de pago`);
+                t = Date.now();
                 const btnContinuarTel = pagina.locator('button.fontBoldAMX:has-text("Continuar"), button.bg-\\[\\#7b1fa2\\]:has-text("Continuar"), button:has-text("Continuar"), button[type="submit"]').first();
                 await btnContinuarTel.waitFor({ state: 'visible', timeout: 25000 });
                 await btnContinuarTel.scrollIntoViewIfNeeded().catch(() => {});
                 await btnContinuarTel.click({ force: true });
                 await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+                logTelcel(id, `✅ Clic en continuar realizado en ${Date.now() - t} ms`);
 
                 ultimaEtapa = "Llenado de datos de tarjeta";
+                logTelcel(id, `⏳ Esperando formulario siguiente (tarjeta)`);
+                t = Date.now();
                 const inputCC = pagina.locator('input#creditCardNumber, input[placeholder*="16 dígitos" i], input[name="cardNumber"]').first();
                 await inputCC.waitFor({ state: 'attached', timeout: 30000 });
                 await inputCC.waitFor({ state: 'visible', timeout: 30000 });
+                logTelcel(id, `✅ Formulario siguiente detectado en ${Date.now() - t} ms`);
 
                 if (!(await inputCC.isEditable().catch(() => false)) || !(await inputCC.isEnabled().catch(() => false))) {
                     throw new Error("CAMPO_TARJETA_NO_DISPONIBLE");
                 }
 
+                t = Date.now();
                 await inputCC.scrollIntoViewIfNeeded().catch(() => {});
                 await inputCC.click({ force: true });
                 await inputCC.fill(cc, { force: true });
@@ -891,6 +940,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                         input.dispatchEvent(new Event('blur', { bubbles: true }));
                     });
                 }).catch(() => {});
+                logTelcel(id, `✅ Datos de tarjeta llenados en ${Date.now() - t} ms`);
 
                 // 2. CONFIRMACIÓN DE PAGO (SIN MUTACIÓN FORZADA DEL DOM — ESPERA NATURAL DE ENABLED)
                 ultimaEtapa = "Confirmación de pago";
@@ -907,6 +957,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await pagina.waitForTimeout(200);
                 }
 
+                logTelcel(id, `💸 Clic en botón confirmar/pagar`);
                 if (await btnContinuar.isEnabled().catch(() => false)) {
                     await btnContinuar.click();
                 } else {
@@ -921,10 +972,12 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 // 4. ESPERA ACTIVA REDUCIDA (MÁXIMO 40s CON POLLING ACTIVO DE 500ms)
                 ultimaEtapa = "Analizando respuesta y comprobante";
+                logTelcel(id, `⏳ Esperando confirmación/respuesta del portal (máx 40s)...`);
                 const inicioEspera = Date.now();
                 const TIEMPO_MAXIMO_ESPERA_TELCEL_MS = 40000;
                 let textoFinalPagina = "";
                 let clasificacionFinal = null;
+                let ultimoEstadoLog = null;
 
                 while (Date.now() - inicioEspera < TIEMPO_MAXIMO_ESPERA_TELCEL_MS) {
                     textoFinalPagina = await pagina.evaluate(() => {
@@ -965,8 +1018,18 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                     clasificacionFinal = clasificarResultadoTelcel(textoFinalPagina, id);
 
-                    // Si se detecta un estado determinante, salir de inmediato sin esperar el timeout
-                    if (['EXITO', 'RECHAZO_BANCARIO', 'BLOQUEO_TELCEL', 'PROCESANDO'].includes(clasificacionFinal.estado)) {
+                    if (clasificacionFinal.estado === 'PROCESANDO') {
+                        if (ultimoEstadoLog !== 'PROCESANDO') {
+                            ultimoEstadoLog = 'PROCESANDO';
+                            logTelcel(id, `⏳ Telcel sigue procesando el pago... (${Date.now() - inicioEspera} ms)`);
+                        }
+                    } else if (clasificacionFinal.estado !== ultimoEstadoLog && clasificacionFinal.estado !== 'DESCONOCIDO') {
+                        ultimoEstadoLog = clasificacionFinal.estado;
+                        logTelcel(id, `🔎 Estado detectado: ${clasificacionFinal.estado} en ${Date.now() - inicioEspera} ms`);
+                    }
+
+                    // Solo los estados finales inequívocos terminan inmediatamente el polling (PROCESANDO continúa)
+                    if (['EXITO', 'RECHAZO_BANCARIO', 'BLOQUEO_TELCEL', 'ERROR_TELCEL'].includes(clasificacionFinal.estado)) {
                         break;
                     }
 
@@ -976,6 +1039,19 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 if (!clasificacionFinal || clasificacionFinal.estado === 'DESCONOCIDO') {
                     clasificacionFinal = clasificarResultadoTelcel(textoFinalPagina, id);
                 }
+
+                // Si tras el tiempo máximo se observó PROCESANDO, conservarlo intacto como PROCESANDO/PENDIENTE
+                if (ultimoEstadoLog === 'PROCESANDO' && clasificacionFinal.estado === 'DESCONOCIDO') {
+                    clasificacionFinal = {
+                        estado: 'PROCESANDO',
+                        subtipo: 'EN_PROCESO',
+                        titulo: '⏳ RECARGA EN PROCESO — PENDIENTE DE CONFIRMACIÓN',
+                        icono: '⏳',
+                        explicacion: 'La recarga fue enviada y se encuentra en validación por Telcel.'
+                    };
+                }
+
+                logTelcel(id, `🔎 Estado final Telcel: ${clasificacionFinal.estado} (Tiempo total de espera: ${Date.now() - inicioEspera} ms)`);
 
                 if (miId === ejecucionesUsuario.get(id)) {
                     const fragmentoLeido = extraerFragmentoClave(textoFinalPagina);
@@ -1090,17 +1166,21 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
             } catch (errIntento) {
                 ultimaEtapa = errIntento.message || ultimaEtapa;
+                logTelcel(id, `❌ Etapa donde falló: ${ultimaEtapa}`);
+                logTelcel(id, `❌ Error: ${errIntento.message || errIntento}`);
+                logTelcel(id, `🌐 URL actual: ${pagina && !pagina.isClosed() ? pagina.url() : 'N/A'}`);
                 if (pagina && !pagina.isClosed()) {
                     ultimaCapturaError = await tomarCapturaEnfocada(pagina);
                 }
                 throw errIntento;
             } finally {
+                logTelcel(id, `🧹 Cerrando sesión de navegador Telcel`);
                 await cerrarSesionNavegador(id);
             }
         }, 3, id);
 
     } catch (errTelcel) {
-        console.error(`[Usuario ${id}] ❌ Fallo total:`, errTelcel.message || errTelcel);
+        logTelcel(id, `❌ Fallo total Telcel: ${errTelcel.message || errTelcel}`);
         await limpiarMensajesTemporales(ctx, id);
 
         const mensajeErrorFinal = 
@@ -1120,6 +1200,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             await ctx.replyWithHTML(mensajeErrorFinal);
         }
     } finally {
+        logTelcel(id, `🧹 Cerrando sesión Telcel en finally global`);
         await cerrarSesionNavegador(id);
     }
 }
@@ -1147,7 +1228,6 @@ const BAIT_SEL = {
   PASARELA_PAYPAL: [
     'iframe[name*="paypal" i]',
     'iframe[src*="paypal" i]',
-    'iframe[name*="zoid" i]',
     '#paypal-button-container iframe',
     '[data-funding-source="paypal"]',
     'div.paypal-button[data-funding-source="paypal"]',
@@ -1444,70 +1524,337 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
     throw new Error("FALLO_ABRIR_PAQUETE: Botón de avance deshabilitado o no interactivo");
 }
 
-// 6. DETECTOR DE PASARELA SIMPLE (OBSERVADOR PURO — TIMEOUT: 5000ms, POLLING: 120ms)
-async function detectarPasarelaBait(pag, id) {
+function truncar(str, max = 180) {
+    if (!str) return '';
+    const limpio = String(str).replace(/\s+/g, ' ').trim();
+    return limpio.length > max ? limpio.slice(0, max) + '...' : limpio;
+}
+
+function esFramePrerender(f) {
+    if (!f) return false;
+    const name = (f.name() || '').toLowerCase();
+    const url = (f.url() || '').toLowerCase();
+    if (name.includes('prerender') || name.includes('__zoid_prerender_frame__')) {
+        return true;
+    }
+    if (url === 'about:blank' && name.includes('prerender')) {
+        return true;
+    }
+    return false;
+}
+
+// 5.1 ESPERA EXPLÍCITA Y DIAGNÓSTICO DE TRANSICIÓN INTERMEDIA (MÁXIMO 15s, POLLING: 250ms)
+async function esperarFinPantallaIntermediaBait(pag, id) {
+    const t0 = Date.now();
+    const TIMEOUT_INTERMEDIO_MS = 15000;
+    let modalRegistroDetectado = false;
+    let ultimoEstadoTransicion = '';
+
+    while (Date.now() - t0 < TIMEOUT_INTERMEDIO_MS) {
+        const transcurrido = Date.now() - t0;
+        const contexto = pag.context();
+        const paginas = contexto && contexto.pages ? contexto.pages() : [pag];
+        const numPags = paginas.length;
+        const popup = popupsActivosBait.get(id);
+        const paginasARevisar = (popup && !popup.isClosed() && !paginas.includes(popup))
+            ? [...paginas, popup]
+            : paginas;
+
+        let framesTotales = [];
+        for (const p of paginasARevisar) {
+            const pFrames = p.frames ? p.frames() : [p];
+            framesTotales.push(...pFrames);
+        }
+
+        const numFrames = framesTotales.length;
+        const urlActual = pag.url() || '';
+
+        // 1. PRIORIDAD 1: COMPROBAR SI YA EXISTE UN FRAME ACTIVO DE PAYPAL (PRIORIDAD ABSOLUTA)
+        let ppFrameActivo = false;
+        for (const f of framesTotales) {
+            if (esFramePrerender(f)) continue;
+            const fUrl = (f.url() || '').toLowerCase();
+            const fName = (f.name() || '').toLowerCase();
+
+            if (fUrl.includes('paypal.com/smart/buttons') || fUrl.includes('smart/buttons') || fName.includes('paypal_buttons') || fUrl.includes('paypal.com/smart/card-fields') || fUrl.includes('smart/card-fields')) {
+                ppFrameActivo = true;
+                break;
+            }
+        }
+
+        if (ppFrameActivo) {
+            console.log(`✅ [Bait Usuario ${id}] PAYPAL ACTIVO — ignorando texto residual del modal`);
+            console.log(`ESTADO_TRANSICION: PAYPAL_VISIBLE`);
+            return { estado: 'OK', pasarela: 'PAYPAL' };
+        }
+
+        // 2. PRIORIDAD 2: COMPROBAR SI YA EXISTE UN FRAME ACTIVO DE CONEKTA
+        let ckFrameActivo = false;
+        for (const f of framesTotales) {
+            if (esFramePrerender(f)) continue;
+            const fUrl = (f.url() || '').toLowerCase();
+            const fName = (f.name() || '').toLowerCase();
+
+            if (fName.includes('conekta_embedded_checkout') || fUrl.includes('conekta') || fName.includes('conekta')) {
+                ckFrameActivo = true;
+                break;
+            }
+        }
+
+        if (ckFrameActivo) {
+            console.log(`⚠️ [Bait Usuario ${id}] CONEKTA ACTIVO — ignorando texto residual del modal`);
+            console.log(`ESTADO_TRANSICION: CONEKTA_VISIBLE`);
+            return { estado: 'OK', pasarela: 'CONEKTA' };
+        }
+
+        // 3. PRIORIDAD 3: COMPROBAR SI EXISTE UN CONTENEDOR VISIBLE REAL DEL MODAL REGISTRA TU LÍNEA
+        const modalRealmenteVisible = await pag.evaluate(() => {
+            const esVisible = el => {
+                if (!el) return false;
+                const s = window.getComputedStyle(el);
+                return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+            };
+
+            const selectoresModal = ['dialog[open]', '.modal.show', 'div[role="dialog"]', 'div.modal', 'app-modal', 'app-dialog', '[class*="modal-dialog" i]'];
+            for (const sel of selectoresModal) {
+                const els = document.querySelectorAll(sel);
+                for (const el of els) {
+                    if (esVisible(el)) {
+                        const t = (el.innerText || '').toLowerCase();
+                        if (t.includes('registra tu línea') || t.includes('registra tu linea')) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }).catch(() => false);
+
+        if (modalRealmenteVisible) {
+            if (!modalRegistroDetectado) {
+                modalRegistroDetectado = true;
+                console.log(`🟡 [Bait Usuario ${id}] Modal REGISTRA TU LÍNEA detectado`);
+                console.log(`ESTADO_TRANSICION: MODAL_REGISTRO`);
+            }
+
+            const estadoResumen = `modal=true|frms=${numFrames}`;
+            if (estadoResumen !== ultimoEstadoTransicion) {
+                ultimoEstadoTransicion = estadoResumen;
+                console.log(`⏳ [Bait Usuario ${id}] Esperando que termine modal REGISTRA TU LÍNEA (${transcurrido} ms)`);
+                console.log(`🌐 URL: ${truncar(urlActual)} | 📄 Páginas: ${numPags} | 🧩 Frames: ${numFrames}`);
+            }
+
+            await pag.waitForTimeout(250);
+            continue;
+        }
+
+        // Si el modal estuvo visible y ahora desapareció
+        if (modalRegistroDetectado && !modalRealmenteVisible) {
+            console.log(`✅ [Bait Usuario ${id}] Modal REGISTRA TU LÍNEA desapareció — buscando pasarela`);
+            console.log(`ESTADO_TRANSICION: ESPERANDO_PASARELA`);
+
+            // Re-enumerar frames inmediatamente
+            const ctx2 = pag.context();
+            const pags2 = ctx2 ? ctx2.pages() : [pag];
+            let ppPost = false;
+            let ckPost = false;
+
+            for (const p of pags2) {
+                const frms = p.frames ? p.frames() : [p];
+                for (const f of frms) {
+                    if (esFramePrerender(f)) continue;
+                    const u = (f.url() || '').toLowerCase();
+                    const n = (f.name() || '').toLowerCase();
+                    if (u.includes('smart/buttons') || n.includes('paypal_buttons') || u.includes('smart/card-fields')) ppPost = true;
+                    if (n.includes('conekta_embedded_checkout') || u.includes('conekta') || n.includes('conekta')) ckPost = true;
+                }
+            }
+
+            if (ppPost) {
+                console.log(`✅ [Bait Usuario ${id}] Transición terminó en PAYPAL`);
+                console.log(`ESTADO_TRANSICION: PAYPAL_VISIBLE`);
+                return { estado: 'OK', pasarela: 'PAYPAL' };
+            } else if (ckPost) {
+                console.log(`⚠️ [Bait Usuario ${id}] Transición terminó en CONEKTA`);
+                console.log(`ESTADO_TRANSICION: CONEKTA_VISIBLE`);
+                return { estado: 'OK', pasarela: 'CONEKTA' };
+            } else {
+                return { estado: 'OK', pasarela: 'DESCONOCIDA' };
+            }
+        }
+
+        // 4. TRANSICIÓN / CARGA GENERAL
+        const estadoResumen = `modal=false|frms=${numFrames}`;
+        if (estadoResumen !== ultimoEstadoTransicion) {
+            ultimoEstadoTransicion = estadoResumen;
+            console.log(`⏳ [Bait Usuario ${id}] Transición todavía cargando (${transcurrido} ms)...`);
+            console.log(`🌐 URL: ${truncar(urlActual)} | 📄 Páginas: ${numPags} | 🧩 Frames: ${numFrames}`);
+        }
+
+        await pag.waitForTimeout(250);
+    }
+
+    // Si expira el timeout de 15s:
+    const duracion = Date.now() - t0;
+    const urlFinal = pag.url() || '';
+    const framesFinales = pag.frames ? pag.frames().map(f => truncar(f.name(), 30)).filter(Boolean) : [];
+
+    if (modalRegistroDetectado) {
+        console.log(`⚠️ [Bait Usuario ${id}] MODAL REGISTRA TU LÍNEA ATASCADO`);
+        console.log(`Tiempo: ${duracion} ms`);
+        console.log(`Frames: ${framesFinales.length} (${framesFinales.join(', ')})`);
+        console.log(`URL: ${truncar(urlFinal)}`);
+        console.log(`ESTADO_TRANSICION: MODAL_ATASCADO`);
+
+        return {
+            estado: 'MODAL_REGISTRO_ATASCADO',
+            subtipo: 'BAIT_TRANSICION_NO_TERMINO',
+            exito: false,
+            pagoConfirmado: false
+        };
+    }
+
+    console.log(`⚠️ [Bait Usuario ${id}] Pantalla intermedia concluyó por timeout de ${duracion} ms`);
+    return { estado: 'TIMEOUT', exito: false, pagoConfirmado: false };
+}
+
+async function detectarPasarelaBait(pag, id, intento = 1) {
+    console.log(`🔍 [Bait Usuario ${id}] (Intento ${intento}) Iniciando detección de pasarela`);
     const inicio = Date.now();
-    const TIMEOUT_DETECCION_MS = 5000;
+    const TIMEOUT_DETECCION_MS = 12000;
+
+    let pasarelaProvisional = 'NINGUNA';
 
     while (Date.now() - inicio < TIMEOUT_DETECCION_MS) {
+        const contexto = pag.context();
+        const paginasActivas = contexto ? contexto.pages() : [pag];
         const popup = popupsActivosBait.get(id);
-        const paginasARevisar = [pag];
-        if (popup && typeof popup.isClosed === 'function' && !popup.isClosed()) {
-            paginasARevisar.push(popup);
-        }
+        const paginasARevisar = (popup && !popup.isClosed() && !paginasActivas.includes(popup))
+            ? [...paginasActivas, popup]
+            : paginasActivas;
 
-        // 1. Revisar si inequívocamente apareció otra pasarela conocida (Conekta / SPEI / OXXO)
-        for (const p of paginasARevisar) {
-            const txt = await p.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
-            if (/conekta/i.test(txt) || /paga seguro con/i.test(txt) || /efectivo en oxxo/i.test(txt) || /spei/i.test(txt)) {
-                return 'OTRA_PASARELA';
-            }
-        }
+        let framesPayPalCandidatos = [];
+        let framesConektaCandidatos = [];
 
-        // 2. Revisar URL de página y popup
+        // 1. EVALUAR FRAMES TÉCNICOS REALES (Mayor prioridad, ignorando prerender)
         for (const p of paginasARevisar) {
-            const pUrl = (p.url() || '').toLowerCase();
-            if (pUrl.includes('paypal')) {
-                return 'PAYPAL';
-            }
-        }
+            const frames = p.frames ? p.frames() : [p];
 
-        // 3. Revisar URL y nombre de frames
-        for (const p of paginasARevisar) {
-            const frames = p.frames ? p.frames() : [];
             for (const f of frames) {
+                if (esFramePrerender(f)) continue;
+
                 const fUrl = (f.url() || '').toLowerCase();
                 const fName = (f.name() || '').toLowerCase();
-                if (fUrl.includes('paypal') || fName.includes('paypal') || fName.includes('zoid')) {
-                    return 'PAYPAL';
+
+                // Evidencia técnica de PAYPAL
+                if (fUrl.includes('paypal.com/smart/buttons') || fUrl.includes('smart/buttons') || fName.includes('paypal_buttons') || fUrl.includes('paypal.com/smart/card-fields') || fUrl.includes('smart/card-fields')) {
+                    framesPayPalCandidatos.push(f);
+                }
+
+                // Evidencia técnica de CONEKTA
+                if (fName.includes('conekta_embedded_checkout') || fUrl.includes('conekta') || fName.includes('conekta')) {
+                    framesConektaCandidatos.push(f);
                 }
             }
         }
 
-        // 4. Revisar selectores específicos de PayPal
+        const cantPP = framesPayPalCandidatos.length;
+        const cantCK = framesConektaCandidatos.length;
+
+        if (cantPP > 0 && cantCK > 0) {
+            console.log(`Frames candidatos PAYPAL: ${cantPP}`);
+            console.log(`Frames candidatos CONEKTA: ${cantCK}`);
+            console.log(`Pasarela provisional: SIMULTANEA — esperando hasta 2s para estabilizar...`);
+            await pag.waitForTimeout(2000);
+
+            // Re-enumerar frames tras la espera adicional
+            const ctx2 = pag.context();
+            const pags2 = ctx2 ? ctx2.pages() : [pag];
+            let ppFinal = [];
+            let ckFinal = [];
+
+            for (const p of pags2) {
+                const frms = p.frames ? p.frames() : [p];
+                for (const f of frms) {
+                    if (esFramePrerender(f)) continue;
+                    const u = (f.url() || '').toLowerCase();
+                    const n = (f.name() || '').toLowerCase();
+                    if (u.includes('smart/buttons') || n.includes('paypal_buttons') || u.includes('smart/card-fields')) ppFinal.push(f);
+                    if (n.includes('conekta_embedded_checkout') || u.includes('conekta') || n.includes('conekta')) ckFinal.push(f);
+                }
+            }
+
+            console.log(`Frames candidatos PAYPAL: ${ppFinal.length}`);
+            console.log(`Frames candidatos CONEKTA: ${ckFinal.length}`);
+
+            if (ppFinal.length > 0) {
+                console.log(`Pasarela definitiva: PAYPAL`);
+                return { pasarela: 'PAYPAL', confirmada: true };
+            } else if (ckFinal.length > 0) {
+                console.log(`Pasarela definitiva: CONEKTA`);
+                return { estado: 'PASARELA_NO_ADMITIDA', pasarela: 'CONEKTA', confirmada: true, exito: false, pagoConfirmado: false };
+            }
+        } else if (cantPP > 0) {
+            console.log(`Frames candidatos PAYPAL: ${cantPP}`);
+            console.log(`Frames candidatos CONEKTA: ${cantCK}`);
+            console.log(`Pasarela definitiva: PAYPAL`);
+            return { pasarela: 'PAYPAL', confirmada: true };
+        } else if (cantCK > 0) {
+            console.log(`Frames candidatos PAYPAL: ${cantPP}`);
+            console.log(`Frames candidatos CONEKTA: ${cantCK}`);
+            console.log(`Pasarela definitiva: CONEKTA`);
+            return { estado: 'PASARELA_NO_ADMITIDA', pasarela: 'CONEKTA', confirmada: true, exito: false, pagoConfirmado: false };
+        }
+
+        // 2. Si no hay frames aún, registrar pasarela provisional por URL principal
+        let urlPP = false;
+        let urlCK = false;
         for (const p of paginasARevisar) {
-            for (const sel of BAIT_SEL.PASARELA_PAYPAL) {
-                try {
-                    const el = p.locator(sel).first();
-                    if (await el.isVisible({ timeout: 30 }).catch(() => false) || (await el.count().catch(() => 0)) > 0) {
-                        return 'PAYPAL';
-                    }
-                } catch(e) {}
+            const pUrl = (p.url() || '').toLowerCase();
+            if (pUrl.includes('paypal.com')) urlPP = true;
+            if (pUrl.includes('conekta.com') || pUrl.includes('conekta')) urlCK = true;
+        }
+
+        if (urlPP && !urlCK) {
+            pasarelaProvisional = 'PAYPAL';
+        } else if (urlCK && !urlPP) {
+            pasarelaProvisional = 'CONEKTA';
+        }
+
+        // 3. Texto visible del body (menor prioridad, solo provisional)
+        if (pasarelaProvisional === 'NINGUNA') {
+            for (const p of paginasARevisar) {
+                const txt = await p.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
+                if (/paypal/i.test(txt) && !/conekta/i.test(txt)) {
+                    pasarelaProvisional = 'PAYPAL';
+                } else if (/conekta|paga seguro con|spei|oxxo/i.test(txt) && !/paypal/i.test(txt)) {
+                    pasarelaProvisional = 'CONEKTA';
+                }
             }
         }
 
-        // 5. Revisar texto visible como último recurso
-        for (const p of paginasARevisar) {
-            const txt = await p.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
-            if (/paypal/i.test(txt)) {
-                return 'PAYPAL';
-            }
-        }
-
-        await pag.waitForTimeout(120);
+        await pag.waitForTimeout(150);
     }
 
-    return 'TIMEOUT';
+    // Diagnóstico final tras 12 segundos sin pasarela confirmada
+    const contexto = pag.context();
+    const paginasActivas = contexto ? contexto.pages() : [pag];
+    const numPags = paginasActivas.length;
+    const numFrames = pag.frames ? pag.frames().length : 0;
+    const urlFinal = pag.url() || '';
+    const txtFinal = await pag.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
+
+    console.log(`Frames candidatos PAYPAL: 0`);
+    console.log(`Frames candidatos CONEKTA: 0`);
+    console.log(`Pasarela provisional: ${pasarelaProvisional}`);
+    console.log(`⏱️ [Bait Usuario ${id}] SIN PASARELA CONFIRMADA`);
+    console.log(`🌐 URL final: ${truncar(urlFinal)}`);
+    console.log(`📄 páginas: ${numPags}`);
+    console.log(`🧩 frames: ${numFrames}`);
+    console.log(`📝 texto visible resumido: "${truncar(txtFinal, 180)}"`);
+    console.log(`Pasarela definitiva: TIMEOUT`);
+
+    return { estado: 'PASARELA_NO_DETERMINADA', pasarela: 'TIMEOUT', confirmada: false, exito: false, pagoConfirmado: false };
 }
 
 // 7. DIAGNÓSTICO Y ELEMENTOS INTERNOS DE PAYPAL
@@ -1517,95 +1864,283 @@ async function paso3DiagnosticoYElementosPayPalBait(pag, id, datos, monto = 300)
     const contexto = pag.context();
     const paginasActivas = contexto ? contexto.pages() : [pag];
     const framesTotales = target.frames ? target.frames() : [];
-    const framesPayPal = framesTotales.filter(f => (f.url() || '').toLowerCase().includes('paypal') || (f.name() || '').toLowerCase().includes('paypal') || (f.name() || '').toLowerCase().includes('zoid'));
+    const framesPayPal = framesTotales.filter(f => !esFramePrerender(f) && ((f.url() || '').toLowerCase().includes('paypal') || (f.name() || '').toLowerCase().includes('paypal')));
     const textoVisible = await target.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
-    const lineasPayPal = textoVisible.split('\n').map(l => l.trim()).filter(l => /paypal|tarjeta|pago/i.test(l)).join(' | ').slice(0, 200);
+    const lineasPayPal = textoVisible.split('\n').map(l => l.trim()).filter(l => /paypal|tarjeta|pago/i.test(l)).join(' | ').slice(0, 180);
 
     console.log("==================================================");
     console.log(`[Bait Usuario ${id}] PASO 1 OK`);
     console.log(`[Bait Usuario ${id}] PASO 2 OK — PAYPAL DETECTADO`);
-    console.log(`[Bait Usuario ${id}] URL: ${target.url()}`);
+    console.log(`[Bait Usuario ${id}] URL: ${truncar(target.url())}`);
     console.log(`[Bait Usuario ${id}] cantidad de páginas: ${paginasActivas.length}`);
     console.log(`[Bait Usuario ${id}] cantidad de frames: ${framesTotales.length}`);
-    console.log(`[Bait Usuario ${id}] frames relacionados con PayPal (${framesPayPal.length}):`, framesPayPal.map(f => ({ name: f.name(), url: f.url().slice(0, 80) })));
+    console.log(`[Bait Usuario ${id}] frames relacionados con PayPal (${framesPayPal.length}):`, framesPayPal.map(f => ({ name: truncar(f.name(), 50), url: truncar(f.url(), 80) })));
     console.log(`[Bait Usuario ${id}] texto visible relacionado con PayPal: "${lineasPayPal}"`);
     console.log("==================================================");
 
     try {
-        await paso3HacerClicTarjetaBait(pag, id);
+        await paso3HacerClicTarjetaBait(pag, id, 'PAYPAL');
+        await verificarCheckoutTarjetaConfirmado(pag, id);
+
+        // Proceder al llenado de tarjeta y confirmación del pago en PayPal
+        console.log(`[Bait Usuario ${id}] 💳 PASO 3: Llenando datos de tarjeta en PayPal y procesando pago...`);
         await paso3LlenarTarjetaYConfirmarBait(pag, id, datos);
-        const resConfirmacion = await paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto);
-        return resConfirmacion;
+
+        console.log(`[Bait Usuario ${id}] 🚀 PASO 4: Confirmando términos y realizando clic en PAGAR AHORA...`);
+        const resultadoCobro = await paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto);
+
+        return {
+            exito: resultadoCobro.exito,
+            pagoConfirmado: resultadoCobro.pagoConfirmado,
+            pasarela: 'PAYPAL',
+            pasarelaConfirmada: true,
+            tipoResultado: 'RESULTADO_PAGO',
+            clasificacion: resultadoCobro.clasificacion,
+            textoLeido: resultadoCobro.textoLeido
+        };
     } catch (errInterno) {
         console.log(`[Bait Usuario ${id}] ⚠️ Detalle en interacción interna PayPal: ${errInterno.message}.`);
         return {
             exito: false,
+            pagoConfirmado: false,
+            pasarela: 'PAYPAL',
             pasarelaConfirmada: true,
+            tipoResultado: 'RESULTADO_PAGO',
             clasificacion: {
                 estado: 'ERROR_PASARELA',
                 subtipo: 'FALLO_INTERNO_PAYPAL',
                 titulo: '⚠️ ERROR EN PROCESO DE PAGO',
                 icono: '⚠️',
-                explicacion: 'Ocurrió un error al interactuar con el formulario de pago de PayPal.'
+                explicacion: 'Ocurrió un error al procesar el pago en PayPal: ' + (errInterno.message || '')
             },
             textoLeido: errInterno.message || 'Error técnico en pasarela'
         };
     }
 }
 
-async function paso3HacerClicTarjetaBait(pag, id) {
-    console.log(`[Bait Usuario ${id}] 🔍 PASO 3: Localizando botón de tarjeta dentro de PayPal...`);
+async function paso3HacerClicTarjetaBait(pag, id, pasarela = 'PAYPAL') {
+    if (pasarela !== 'PAYPAL') {
+        console.log(`[Bait Usuario ${id}] ⚠️ Protección: Pasarela no es PayPal (${pasarela}). Abortando.`);
+        throw new Error("PAYPAL_REQUERIDO");
+    }
+
+    console.log(`[Bait Usuario ${id}] 🔍 PASO 3: Localizando botón de tarjeta dentro del frame activo de PayPal...`);
     const inicio = Date.now();
     const TIMEOUT_TARJETA_MS = 20000;
     let clickRealizado = false;
 
     while (Date.now() - inicio < TIMEOUT_TARJETA_MS) {
+        const contexto = pag.context();
+        const paginas = contexto && contexto.pages ? contexto.pages() : [pag];
         const popup = popupsActivosBait.get(id);
-        const targetContext = (popup && !popup.isClosed()) ? popup : pag;
-        const frames = targetContext.frames ? targetContext.frames() : [targetContext];
-
-        // 1. Revisar frames individualmente buscando el botón de tarjeta
-        for (const f of frames) {
-            for (const sel of BAIT_SEL.BOTON_TARJETA) {
-                try {
-                    const btn = f.locator(sel).first();
-                    if (await btn.isVisible({ timeout: 60 }).catch(() => false)) {
-                        await btn.scrollIntoViewIfNeeded().catch(() => {});
-                        await btn.click({ force: true });
-                        clickRealizado = true;
-                        console.log(`[Bait Usuario ${id}] 💳 Clic exitoso en botón de Tarjeta: ${sel} (en frame: ${f.name() || 'principal'})`);
-                        break;
-                    }
-                } catch(e) {}
-            }
-            if (clickRealizado) break;
+        if (popup && !popup.isClosed() && !paginas.includes(popup)) {
+            paginas.push(popup);
         }
 
-        // 2. Fallback DOM evaluate individual por frame
-        if (!clickRealizado) {
-            for (const f of frames) {
-                try {
-                    clickRealizado = await f.evaluate(() => {
-                        const btnCard = document.querySelector('div[data-funding-source="card"], [role="button"][data-funding-source="card"], [role="link"][data-funding-source="card"], .paypal-button[data-funding-source="card"], [aria-label*="Tarjeta de débito" i]');
-                        if (btnCard) {
-                            btnCard.click();
-                            return true;
-                        }
-                        return false;
-                    }).catch(() => false);
-                    if (clickRealizado) {
-                        console.log(`[Bait Usuario ${id}] 💳 Clic vía DOM evaluate en botón de Tarjeta (en frame: ${f.name() || 'principal'})`);
+        let todosLosFrames = [];
+        for (const p of paginas) {
+            const pFrames = p.frames ? p.frames() : [p];
+            todosLosFrames.push(...pFrames);
+        }
+
+        // 1. Filtrar frames válidos: deben ser smart/buttons y NO ser prerender
+        const framesSmartButtons = todosLosFrames.filter(f => {
+            if (esFramePrerender(f)) return false;
+            const fUrl = (f.url() || '').toLowerCase();
+            const fName = (f.name() || '').toLowerCase();
+            return fUrl.includes('paypal.com/smart/buttons') || fUrl.includes('smart/buttons') || fName.includes('paypal_buttons');
+        });
+
+        for (const f of framesSmartButtons) {
+            try {
+                // Selector exacto del botón de tarjeta invitado
+                const btn = f.locator('div[data-funding-source="card"]').first();
+                const visible = await btn.isVisible({ timeout: 60 }).catch(() => false);
+                if (!visible) continue;
+
+                const enabled = await btn.isEnabled().catch(() => false);
+                const box = await btn.boundingBox().catch(() => null);
+
+                if (enabled && box && box.width > 0 && box.height > 0) {
+                    console.log(`Frame estable: ${truncar(f.name() || 'principal')}`);
+                    console.log(`URL estable: ${truncar(f.url())}`);
+                    console.log(`Selector tarjeta visible: true`);
+                    console.log(`Esperando estabilidad antes del clic...`);
+
+                    // Ventana de estabilidad de 1000 ms (entre 800 y 1500 ms)
+                    await pag.waitForTimeout(1000);
+
+                    // Segunda comprobación de estabilidad
+                    const fUrlActual = (f.url() || '').toLowerCase();
+                    const frameSigueValido = !f.isDetached() && (fUrlActual.includes('smart/buttons') || fUrlActual.includes('paypal.com'));
+                    const btnSigueVisible = await btn.isVisible().catch(() => false);
+                    const box2 = await btn.boundingBox().catch(() => null);
+
+                    if (frameSigueValido && btnSigueVisible && box2 && box2.width > 0 && box2.height > 0) {
+                        await btn.scrollIntoViewIfNeeded().catch(() => {});
+                        await btn.click({ force: false }).catch(() => btn.click({ force: true }));
+                        clickRealizado = true;
+
+                        console.log(`Clic único ejecutado`);
+                        console.log(`Esperando paypal.com/smart/card-fields`);
                         break;
                     }
-                } catch(e) {}
-            }
+                }
+            } catch (e) {}
         }
 
         if (clickRealizado) break;
         await pag.waitForTimeout(250);
     }
 
+    if (!clickRealizado) {
+        throw new Error("BOTON_TARJETA_PAYPAL_NO_ESTABLE");
+    }
+
     return clickRealizado;
+}
+
+// 7.1 VERIFICACIÓN POST-CLIC DEL CHECKOUT DE TARJETA (ESPERA HASTA 10s)
+async function verificarCheckoutTarjetaConfirmado(pag, id) {
+    const inicio = Date.now();
+    const TIMEOUT_POST_CLICK_MS = 10000;
+    const SELECTORES_CHECKOUT = [
+        'input#credit-card-number',
+        'input[name="credit-card-number"]',
+        'input[name="cardNumber"]',
+        'input[autocomplete="cc-number"]',
+        'input[placeholder*="tarjeta" i]',
+        '#cardNumber',
+        '#credit-card-number',
+        'input#expiration-date',
+        'input[name="expiry"]',
+        'input#cvv',
+        'input#csc',
+        'input[name="cvv"]',
+        'input#given-name',
+        'input#firstName',
+        'input#address-line1',
+        'input#city',
+        'input[name="city"]',
+        'input#email',
+        'input[name="email"]'
+    ];
+
+    let checkoutConfirmado = false;
+
+    while (Date.now() - inicio < TIMEOUT_POST_CLICK_MS) {
+        const contexto = pag.context();
+        const paginas = contexto && contexto.pages ? contexto.pages() : [pag];
+        const popup = popupsActivosBait.get(id);
+        if (popup && !popup.isClosed() && !paginas.includes(popup)) {
+            paginas.push(popup);
+        }
+
+        // 1. Detectar si se abrió una página normal externa de PayPal (login/checkout externo)
+        for (const p of paginas) {
+            const pUrl = (p.url() || '').toLowerCase();
+            if (p !== pag && (pUrl.includes('paypal.com/signin') || pUrl.includes('paypal.com/checkoutnow') || pUrl.includes('paypal.com/cgi-bin'))) {
+                console.log(`⚠️ [Bait Usuario ${id}] PAYPAL ABRIÓ FLUJO EXTERNO — CLIC REALIZADO DURANTE ESTADO NO ESTABLE`);
+                throw new Error("PAYPAL_FLUJO_EXTERNO_NO_EMBEBIDO");
+            }
+        }
+
+        // 2. Buscar evidencia del checkout embebido de invitado (smart/card-fields)
+        for (const p of paginas) {
+            const frames = p.frames ? p.frames() : [p];
+
+            for (const f of frames) {
+                if (esFramePrerender(f)) continue;
+
+                const fUrl = (f.url() || '').toLowerCase();
+                const fName = (f.name() || '').toLowerCase();
+
+                if (fUrl.includes('paypal.com/smart/card-fields') || fUrl.includes('smart/card-fields') || fName.includes('paypal_card_form')) {
+                    checkoutConfirmado = true;
+                    break;
+                }
+
+                for (const sel of SELECTORES_CHECKOUT) {
+                    try {
+                        const el = f.locator(sel).first();
+                        if (await el.isVisible({ timeout: 50 }).catch(() => false)) {
+                            checkoutConfirmado = true;
+                            break;
+                        }
+                    } catch(e) {}
+                }
+                if (checkoutConfirmado) break;
+            }
+            if (checkoutConfirmado) break;
+        }
+
+        if (checkoutConfirmado) break;
+        await pag.waitForTimeout(250);
+    }
+
+    // Enumerar páginas y frames post-click
+    const contexto = pag.context();
+    const paginas = contexto && contexto.pages ? contexto.pages() : [pag];
+    const popup = popupsActivosBait.get(id);
+    if (popup && !popup.isClosed() && !paginas.includes(popup)) {
+        paginas.push(popup);
+    }
+
+    for (const p of paginas) {
+        console.log(`POST-CLICK PAGE -> url: ${truncar(p.url())}`);
+        const frames = p.frames ? p.frames() : [];
+        for (const f of frames) {
+            console.log(`POST-CLICK FRAME -> name: ${truncar(f.name())}, url: ${truncar(f.url())}`);
+        }
+    }
+
+    if (!checkoutConfirmado) {
+        throw new Error("PAYPAL_CHECKOUT_TARJETA_NO_CONFIRMADO");
+    }
+
+    console.log(`✅ [Bait Usuario ${id}] PAYPAL CHECKOUT INVITADO DE TARJETA CONFIRMADO`);
+
+    // Inspeccionar la presencia de cada campo sin interactuar ni rellenar
+    let campoTarjeta = false;
+    let campoVencimiento = false;
+    let campoCsc = false;
+
+    const selectoresNum = ['input#credit-card-number', 'input[name="credit-card-number"]', 'input[name="cardNumber"]', 'input[autocomplete="cc-number"]', 'input[placeholder*="tarjeta" i]', '#cardNumber', '#credit-card-number'];
+    const selectoresExp = ['input#expiration-date', 'input[name="expiry"]', 'input[name="expiration-date"]', 'input[autocomplete="cc-exp"]'];
+    const selectoresCsc = ['input#cvv', 'input#csc', 'input[name="cvv"]', 'input[name="csc"]', 'input[autocomplete="cc-csc"]'];
+
+    for (const p of paginas) {
+        const frames = p.frames ? p.frames() : [p];
+        for (const f of frames) {
+            if (esFramePrerender(f)) continue;
+
+            for (const sel of selectoresNum) {
+                if (await f.locator(sel).first().isVisible({ timeout: 25 }).catch(() => false)) {
+                    campoTarjeta = true;
+                    break;
+                }
+            }
+            for (const sel of selectoresExp) {
+                if (await f.locator(sel).first().isVisible({ timeout: 25 }).catch(() => false)) {
+                    campoVencimiento = true;
+                    break;
+                }
+            }
+            for (const sel of selectoresCsc) {
+                if (await f.locator(sel).first().isVisible({ timeout: 25 }).catch(() => false)) {
+                    campoCsc = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    console.log(`CHECKOUT_LISTO`);
+    if (campoTarjeta) console.log(`CAMPO_TARJETA_VISIBLE`);
+    if (campoVencimiento) console.log(`CAMPO_VENCIMIENTO_VISIBLE`);
+    if (campoCsc) console.log(`CAMPO_CSC_VISIBLE`);
+
+    return true;
 }
 
 async function paso3LlenarTarjetaYConfirmarBait(pag, id, datos) {
@@ -1623,8 +2158,8 @@ async function paso3LlenarTarjetaYConfirmarBait(pag, id, datos) {
         await popupPayPal.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
     }
 
-    const framesPayPal = targetContext.frames ? targetContext.frames().filter(f => f !== targetContext && ((f.url() || '').includes('paypal') || (f.name() || '').includes('paypal'))) : [];
-    const contextosPrioritarios = [targetContext, ...framesPayPal, ...(targetContext.frames ? targetContext.frames() : [])];
+    const framesPayPal = targetContext.frames ? targetContext.frames().filter(f => !esFramePrerender(f) && ((f.url() || '').toLowerCase().includes('paypal') || (f.url() || '').toLowerCase().includes('card-fields') || (f.name() || '').toLowerCase().includes('paypal') || (f.name() || '').toLowerCase().includes('card-fields'))) : [];
+    const contextosPrioritarios = [...framesPayPal, targetContext, ...(targetContext.frames ? targetContext.frames() : [])];
 
     const llenarCampo = async (selectores, valor, nombreCampo) => {
         for (const ctx of contextosPrioritarios) {
@@ -1709,38 +2244,42 @@ async function paso3LlenarTarjetaYConfirmarBait(pag, id, datos) {
         if (consentChecked) break;
     }
 
-    await pag.waitForTimeout(400);
+    await pag.waitForTimeout(500);
 
-    // 12. Botón Pagar en la pasarela de tarjeta
+    // 12. Botón Pagar en la pasarela de tarjeta (PayPal)
     const selectoresBotonPagar = [
         'button#submit-button',
-        `button#submit-button:has-text("Pagar")`,
-        `button:has-text("Pagar $${monto}")`,
-        `button:has-text("Pagar $${monto}.00")`,
-        `button:has-text("Pagar $${monto}.00 MXN")`,
+        'button[id="submit-button"]',
         'button.css-aezqgw-button-Button',
-        'button[class*="button-Button"]:has-text("Pagar")',
-        'button[type="button"]:has-text("Pagar")',
-        'button:has-text("Pagar $")',
-        'button:has-text("Pagar")',
-        'button:has-text("Continuar")',
-        'button[type="submit"]:has-text("Pagar")',
-        'button[type="submit"]',
+        'button[class*="button-Button"]',
+        'button[aria-live="polite"]',
         '#submit-button'
     ];
 
     let clickPagar = false;
     const inicioEsperaPago = Date.now();
-    const TIMEOUT_BTN_PAGO = 10000;
+    const TIMEOUT_BTN_PAGO = 20000;
 
     while (Date.now() - inicioEsperaPago < TIMEOUT_BTN_PAGO) {
         for (const ctx of contextosPrioritarios) {
             for (const sel of selectoresBotonPagar) {
                 try {
                     const btn = ctx.locator(sel).first();
-                    if (await btn.isVisible({ timeout: 100 }).catch(() => false)) {
+                    if (await btn.isVisible({ timeout: 150 }).catch(() => false)) {
                         await btn.scrollIntoViewIfNeeded().catch(() => {});
-                        await btn.click({ force: true });
+                        
+                        // Intento 1: Click nativo Playwright
+                        await btn.click({ force: true, delay: 50 }).catch(() => {});
+                        
+                        // Intento 2: Eventos completos de Mouse en DOM
+                        await btn.evaluate(el => {
+                            el.focus();
+                            el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                            el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                            if (typeof el.click === 'function') el.click();
+                        }).catch(() => {});
+
                         clickPagar = true;
                         console.log(`[Bait Usuario ${id}] 💸 Clic en botón Pagar de pasarela (${sel})`);
                         break;
@@ -1750,19 +2289,48 @@ async function paso3LlenarTarjetaYConfirmarBait(pag, id, datos) {
             if (clickPagar) break;
         }
         if (clickPagar) break;
-        await pag.waitForTimeout(150);
+        await pag.waitForTimeout(250);
     }
+
+    // 13. Verificación de que PayPal recibió el clic y comenzó a procesar
+    if (clickPagar) {
+        for (let check = 1; check <= 4; check++) {
+            await pag.waitForTimeout(1000);
+            let sigueSinProcesar = false;
+            for (const ctx of framesPayPal) {
+                try {
+                    const btn = ctx.locator('button#submit-button, button.css-aezqgw-button-Button').first();
+                    if (await btn.isVisible({ timeout: 100 }).catch(() => false)) {
+                        const ariaDis = await btn.getAttribute('aria-disabled').catch(() => '');
+                        if (ariaDis === 'false') {
+                            sigueSinProcesar = true;
+                            console.log(`[Bait Usuario ${id}] 🔄 Reintentando clic directo en Pagar (${check})...`);
+                            await btn.scrollIntoViewIfNeeded().catch(() => {});
+                            await btn.click({ force: true }).catch(() => {});
+                            await btn.evaluate(el => el.click()).catch(() => {});
+                        }
+                    }
+                } catch(e) {}
+            }
+            if (!sigueSinProcesar) {
+                console.log(`[Bait Usuario ${id}] ✅ Botón Pagar procesado por PayPal`);
+                break;
+            }
+        }
+    }
+
+    console.log(`[Bait Usuario ${id}] ⏳ Esperando procesamiento de PayPal tras clic en Pagar...`);
+    await pag.waitForTimeout(3000);
 
     return { exito: true, consentChecked, clickPagar, targetContext };
 }
 
 async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
-    await pag.waitForTimeout(2000);
-
     const inicioEsperaCheckout = Date.now();
-    const TIMEOUT_CHECKOUT_MS = 20000;
+    const TIMEOUT_CHECKOUT_MS = 15000;
     let botonPagarAhoraClickeado = false;
 
+    // 1. Intentar marcar checkbox de términos y dar clic en "Pagar ahora" si BAIT lo muestra en la página principal
     while (Date.now() - inicioEsperaCheckout < TIMEOUT_CHECKOUT_MS) {
         const selectoresCheckboxBait = [
             'label:has-text("He leído, entiendo y consiento") input[type="checkbox"]',
@@ -1770,44 +2338,33 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
             'input[type="checkbox"]'
         ];
 
-        let cbMarcada = false;
         for (const sel of selectoresCheckboxBait) {
             try {
                 const cbs = pag.locator(sel);
                 const count = await cbs.count().catch(() => 0);
                 if (count > 0) {
                     const cb = cbs.first();
-                    await cb.scrollIntoViewIfNeeded().catch(() => {});
-                    await cb.check({ force: true }).catch(() => cb.click({ force: true }));
-                    cbMarcada = true;
-                    break;
+                    if (await cb.isVisible({ timeout: 50 }).catch(() => false)) {
+                        await cb.scrollIntoViewIfNeeded().catch(() => {});
+                        await cb.check({ force: true }).catch(() => cb.click({ force: true }));
+                        break;
+                    }
                 }
             } catch(e) {}
         }
-
-        if (!cbMarcada) {
-            const allCbs = pag.locator('input[type="checkbox"]');
-            const total = await allCbs.count().catch(() => 0);
-            for (let i = 0; i < total; i++) {
-                await allCbs.nth(i).check({ force: true }).catch(() => allCbs.nth(i).click({ force: true })).catch(() => {});
-            }
-        }
-
-        await pag.waitForTimeout(200);
 
         const selectoresPagarAhora = [
             'button:has-text("Pagar ahora")',
             'button:has-text("PAGAR AHORA")',
             'button:has-text("Pagar Ahora")',
             'button.ph-bait-ex-85__submit:has-text("Pagar")',
-            'button:has-text("Pagar")',
-            'button[type="submit"]'
+            'button:has-text("Pagar")'
         ];
 
         for (const sel of selectoresPagarAhora) {
             try {
                 const btn = pag.locator(sel).first();
-                if (await btn.isVisible({ timeout: 100 }).catch(() => false)) {
+                if (await btn.isVisible({ timeout: 80 }).catch(() => false)) {
                     await btn.scrollIntoViewIfNeeded().catch(() => {});
                     await btn.click({ force: true });
                     botonPagarAhoraClickeado = true;
@@ -1819,6 +2376,7 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
 
         if (botonPagarAhoraClickeado) break;
 
+        // Comprobar si ya apareció un resultado en pantalla
         const textoBody = await pag.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
         if (/(éxito)|(exitosa)|(recarga\s*exitosa)|(pago\s*exitoso)|(folio)|(fondos\s*insuficientes)|(tarjeta\s*rechazada)|(declinada)/i.test(textoBody)) {
             break;
@@ -1827,51 +2385,81 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
         await pag.waitForTimeout(300);
     }
 
+    // 2. Polling activo de respuesta en la página y frames
     let textoFinalPagina = "";
     let clasificacionFinal = null;
+    let ultimoEstadoLog = null;
     const inicioEsperaRespuesta = Date.now();
     const TIEMPO_ESPERA_RESPUESTA_MS = 40000;
 
     while (Date.now() - inicioEsperaRespuesta < TIEMPO_ESPERA_RESPUESTA_MS) {
-        textoFinalPagina = await pag.evaluate(() => {
-            const selectores = [
-                'dialog[open]',
-                '.modal.show',
-                '.modal-content',
-                '.alert',
-                '.error-container',
-                '.error',
-                '[class*="voucher" i]',
-                '[class*="receipt" i]',
-                '[class*="success" i]',
-                '[class*="result" i]',
-                '[class*="summary" i]',
-                'app-root main'
-            ];
+        const contexto = pag.context();
+        const paginas = contexto && contexto.pages ? contexto.pages() : [pag];
+        const popup = popupsActivosBait.get(id);
+        const paginasARevisar = (popup && !popup.isClosed() && !paginas.includes(popup))
+            ? [...paginas, popup]
+            : paginas;
 
-            const esVisible = el => {
-                if (!el) return false;
-                const s = window.getComputedStyle(el);
-                return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
-            };
+        let fragmentosTotales = [];
 
-            let fragmentos = [];
-            for (const sel of selectores) {
-                document.querySelectorAll(sel).forEach(el => {
-                    if (esVisible(el)) {
-                        const t = (el.innerText || '').trim();
-                        if (t.length > 0 && !fragmentos.includes(t)) {
-                            fragmentos.push(t);
+        for (const p of paginasARevisar) {
+            const frames = p.frames ? p.frames() : [p];
+            for (const f of frames) {
+                try {
+                    const txtFrame = await f.evaluate(() => {
+                        const esVisible = el => {
+                            if (!el) return false;
+                            const s = window.getComputedStyle(el);
+                            return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+                        };
+                        const selectores = [
+                            'dialog[open]',
+                            '.modal.show',
+                            '.modal-content',
+                            '.alert',
+                            '.error-container',
+                            '.error',
+                            '[class*="voucher" i]',
+                            '[class*="receipt" i]',
+                            '[class*="success" i]',
+                            '[class*="result" i]',
+                            '[class*="summary" i]',
+                            'app-root main',
+                            'body'
+                        ];
+                        let frags = [];
+                        for (const sel of selectores) {
+                            document.querySelectorAll(sel).forEach(el => {
+                                if (esVisible(el)) {
+                                    const t = (el.innerText || '').trim();
+                                    if (t.length > 0 && !frags.includes(t)) frags.push(t);
+                                }
+                            });
                         }
-                    }
-                });
-            }
-            return fragmentos.join(' \n ');
-        }).catch(() => '');
+                        return frags.join(' \n ');
+                    }).catch(() => '');
 
+                    if (txtFrame && txtFrame.length > 0) {
+                        fragmentosTotales.push(txtFrame);
+                    }
+                } catch(e) {}
+            }
+        }
+
+        textoFinalPagina = fragmentosTotales.join(' \n ');
         clasificacionFinal = clasificarResultadoBait(textoFinalPagina, id);
 
-        if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA', 'PROCESANDO'].includes(clasificacionFinal.estado)) {
+        if (clasificacionFinal.estado !== ultimoEstadoLog) {
+            ultimoEstadoLog = clasificacionFinal.estado;
+            if (clasificacionFinal.estado !== 'DESCONOCIDO') {
+                console.log(`[Bait Usuario ${id}] Estado detectado: ${clasificacionFinal.estado}`);
+            }
+            if (clasificacionFinal.estado === 'PROCESANDO') {
+                console.log(`⏳ [Bait Usuario ${id}] Pago/recarga en proceso — esperando resultado definitivo...`);
+            }
+        }
+
+        if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA'].includes(clasificacionFinal.estado)) {
             break;
         }
 
@@ -1882,8 +2470,19 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
         clasificacionFinal = clasificarResultadoBait(textoFinalPagina, id);
     }
 
+    if (ultimoEstadoLog === 'PROCESANDO' && (clasificacionFinal.estado === 'DESCONOCIDO' || clasificacionFinal.estado === 'PROCESANDO')) {
+        clasificacionFinal = {
+            estado: 'PROCESANDO',
+            subtipo: 'TIMEOUT_PROCESANDO',
+            titulo: '⏳ RECARGA EN PROCESO — SIN CONFIRMACIÓN FINAL',
+            icono: '⏳',
+            explicacion: 'La recarga fue enviada pero el portal continúa procesando sin emitir confirmación definitiva.'
+        };
+    }
+
     return {
         exito: clasificacionFinal.estado === 'EXITO',
+        pagoConfirmado: clasificacionFinal.estado === 'EXITO',
         botonPagarAhoraClickeado,
         clasificacion: clasificacionFinal,
         textoLeido: extraerFragmentoClave(textoFinalPagina)
@@ -1919,17 +2518,49 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
     try {
         await abrirPaqueteBait(pag, id, numero, correoDinamico, monto);
 
-        console.log(`🔍 [Bait Usuario ${id}] Buscando pasarela (Timeout: 5s)...`);
+        // Esperar explícitamente a que termine la pantalla/modal intermedio antes de buscar la pasarela
+        const resIntermedia = await esperarFinPantallaIntermediaBait(pag, id);
+        if (resIntermedia && resIntermedia.estado === 'MODAL_REGISTRO_ATASCADO') {
+            let capturaDiag = null;
+            if (pag && !pag.isClosed()) {
+                try { capturaDiag = await tomarCapturaEnfocada(pag); } catch(e) {}
+            }
+            await cerrarContextoBait(contexto, id);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pasarelaDetectada: true,
+                pag: null,
+                contexto,
+                captura: capturaDiag,
+                datos: datosCompletos,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'MODAL_REGISTRO_ATASCADO',
+                        subtipo: 'BAIT_TRANSICION_NO_TERMINO',
+                        titulo: '⚠️ MODAL REGISTRA TU LÍNEA ATASCADO',
+                        icono: '⚠️',
+                        explicacion: 'El modal REGISTRA TU LÍNEA permaneció en pantalla durante más de 15 segundos sin permitir la carga de la pasarela.'
+                    },
+                    textoLeido: 'MODAL_REGISTRO_ATASCADO'
+                }
+            };
+        }
+
         const t0 = Date.now();
-        const estadoPasarela = await detectarPasarelaBait(pag, id);
+        const resultadoPasarela = await detectarPasarelaBait(pag, id, intento);
         const transcurrido = Date.now() - t0;
 
-        if (estadoPasarela === 'PAYPAL') {
-            console.log(`✅ [Bait Usuario ${id}] PayPal detectado en ${transcurrido} ms`);
+        if (resultadoPasarela.pasarela === 'PAYPAL' && resultadoPasarela.confirmada === true) {
+            console.log(`✅ [Bait Usuario ${id}] PAYPAL CONFIRMADO (${transcurrido} ms)`);
             pasarelaDetectada = true;
             const resultadoFinalBait = await paso3DiagnosticoYElementosPayPalBait(pag, id, datosCompletos, monto);
             return {
                 exito: resultadoFinalBait.exito,
+                pagoConfirmado: false,
                 pag,
                 contexto,
                 datos: datosCompletos,
@@ -1938,15 +2569,66 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
             };
         }
 
-        if (estadoPasarela === 'OTRA_PASARELA') {
-            console.log(`⚠️ [Bait Usuario ${id}] Otra pasarela detectada en ${transcurrido} ms`);
-        } else {
-            console.log(`⏱️ [Bait Usuario ${id}] Timeout de 5s sin PayPal (${transcurrido} ms)`);
+        let capturaDiag = null;
+        if (pag && !pag.isClosed()) {
+            try {
+                capturaDiag = await tomarCapturaEnfocada(pag);
+            } catch {}
         }
 
-        await cerrarContextoBait(contexto, id);
-        console.log(`🧹 [Bait Usuario ${id}] Contexto cerrado`);
-        return { exito: false, pasarelaDetectada: false };
+        if (resultadoPasarela.pasarela === 'CONEKTA') {
+            console.log(`⚠️ [Bait Usuario ${id}] CONEKTA CONFIRMADO — PASARELA NO ADMITIDA — PAGO NO INICIADO (${transcurrido} ms)`);
+            console.log(`🔄 [Bait Usuario ${id}] Pasarela Conekta rechazada. Cerrando contexto y volviendo a intentar detectar pasarela normalmente (Intento ${intento}/${MAX_RETRIES_BAIT})...`);
+            await cerrarContextoBait(contexto, id);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pasarelaDetectada: false,
+                pag: null,
+                contexto: null,
+                captura: capturaDiag,
+                datos: datosCompletos,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'CONEKTA',
+                    clasificacion: {
+                        estado: 'PASARELA_NO_ADMITIDA',
+                        subtipo: 'CONEKTA_NO_ADMITIDA',
+                        titulo: '⚠️ BAIT ENTREGÓ CONEKTA',
+                        icono: '⚠️',
+                        explicacion: `Este flujo requiere PayPal. Se realizaron ${intento} intentos sin obtener PayPal.`
+                    },
+                    textoLeido: 'CONEKTA CONFIRMADO'
+                }
+            };
+        } else {
+            console.log(`⏱️ [Bait Usuario ${id}] TIMEOUT — PASARELA NO DETERMINADA (${transcurrido} ms)`);
+            console.log(`🔄 [Bait Usuario ${id}] Cerrando contexto y volviendo a intentar detectar pasarela normalmente (Intento ${intento}/${MAX_RETRIES_BAIT})...`);
+            await cerrarContextoBait(contexto, id);
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pasarelaDetectada: false,
+                pag: null,
+                contexto: null,
+                captura: capturaDiag,
+                datos: datosCompletos,
+                resultado: {
+                    exito: false,
+                    pagoConfirmado: false,
+                    pasarela: 'DESCONOCIDA',
+                    clasificacion: {
+                        estado: 'PASARELA_NO_DETERMINADA',
+                        subtipo: 'TIMEOUT_DETECCION',
+                        titulo: '⏱️ PASARELA NO DETERMINADA',
+                        icono: '⏱️',
+                        explicacion: `No se obtuvo respuesta concluyente de la pasarela dentro del tiempo límite tras ${intento} intentos.`
+                    },
+                    textoLeido: 'PASARELA_NO_DETERMINADA'
+                }
+            };
+        }
 
     } catch (err) {
         if (pasarelaDetectada && pag && !pag.isClosed()) {
@@ -1958,12 +2640,14 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
 
             return {
                 exito: false,
+                pagoConfirmado: false,
                 pag,
                 contexto,
                 datos: datosCompletos,
                 pasarelaDetectada: true,
                 resultado: {
                     exito: false,
+                    pagoConfirmado: false,
                     clasificacion: {
                         estado: 'ERROR_POST_PAYPAL',
                         subtipo: 'EXCEPCION_INTERNA',
@@ -1982,8 +2666,8 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
             capturaError = await tomarCapturaEnfocada(pag);
         }
         await cerrarContextoBait(contexto, id);
-        console.log(`🧹 [Bait Usuario ${id}] Contexto cerrado tras excepción`);
-        return { exito: false, pag: null, error: err, captura: capturaError, pasarelaDetectada: false };
+        console.log(`🧹 [Bait Usuario ${id}] Contexto cerrado tras excepción: ${err.message || err}`);
+        return { exito: false, pagoConfirmado: false, pag: null, error: err, captura: capturaError, pasarelaDetectada: false };
     }
 }
 
@@ -2021,7 +2705,7 @@ async function flujoBait(ctx, id, datos) {
 
         if (miId !== ejecucionesUsuario.get(id)) return;
 
-        if (resultadoFinal && resultadoFinal.pag) {
+        if (resultadoFinal) {
             const pag = resultadoFinal.pag;
             const info = resultadoFinal.resultado || {};
             const clasif = info.clasificacion || {
@@ -2034,15 +2718,92 @@ async function flujoBait(ctx, id, datos) {
             const fragmento = info.textoLeido || 'Sin información de respuesta';
             
             let captura = resultadoFinal.captura;
-            if (!captura) {
-                captura = await tomarCapturaEnfocada(pag);
+            if (!captura && pag && !pag.isClosed()) {
+                try {
+                    captura = await tomarCapturaEnfocada(pag);
+                } catch(e) {}
             }
 
             await limpiarMensajesTemporales(ctx, id);
 
             let captionFinal = '';
 
-            if (clasif.estado === 'EXITO') {
+            if (clasif.estado === 'CHECKOUT_LISTO' || clasif.estado === 'PAYPAL_CARD_CHECKOUT_CONFIRMADO') {
+                captionFinal =
+                    `🦁 <b>BOT LEÓN — DIAGNÓSTICO BAIT / PAYPAL</b> 🔍\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
+                    `✅ ▫️ <b>PAYPAL DETECTADO</b>\n` +
+                    `✅ ▫️ <b>Checkout de tarjeta abierto correctamente</b>\n` +
+                    `🛑 ▫️ <b>Prueba detenida antes del pago</b>\n` +
+                    `📌 ▫️ <b>Estado:</b> <code>CHECKOUT_LISTO</code>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `👉 <b>Toca /start para realizar otra operación.</b>`;
+
+                if (captura) {
+                    await ctx.replyWithPhoto({ source: captura }, {
+                        caption: captionFinal.slice(0, 1024),
+                        parse_mode: 'HTML'
+                    });
+                } else {
+                    await ctx.replyWithHTML(captionFinal);
+                }
+
+            } else if (clasif.estado === 'PASARELA_NO_ADMITIDA' || clasif.estado === 'CONEKTA_DETECTADO' || clasif.estado === 'PASARELA_NO_DETERMINADA' || clasif.estado === 'PASARELA_TIMEOUT') {
+                const s = sesiones.get(id) || {};
+                const ult4 = s.ult4 || (s.tarjeta ? s.tarjeta.slice(-4) : '****');
+
+                captionFinal =
+                    `🦁 <b>BAIT — 5 INTENTOS COMPLETADOS</b> 🔄\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+                    `💲 <b>Monto:</b> $${monto} MXN\n` +
+                    `💳 <b>Tarjeta cargada:</b> <code>•••• ${ult4}</code>\n\n` +
+                    `⚠️ ▫️ En los 5 intentos BAIT no entregó la pasarela PayPal.\n` +
+                    `🔒 ▫️ Por seguridad, tus datos bancarios <b>SOLO</b> se procesan en PayPal.\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `👉 <b>¿Deseas realizar otro ciclo de 5 intentos con el mismo número y tarjeta?</b>`;
+
+                const tecladoReintento = Markup.inlineKeyboard([
+                    [Markup.button.callback('🔄 REINTENTAR 5 VECES MÁS', 'btn_reintentar_bait')],
+                    [Markup.button.callback('🦁 IR AL MENÚ PRINCIPAL', 'btn_reiniciar')]
+                ]);
+
+                if (captura) {
+                    await ctx.replyWithPhoto({ source: captura }, {
+                        caption: captionFinal.slice(0, 1024),
+                        parse_mode: 'HTML',
+                        ...tecladoReintento
+                    });
+                } else {
+                    await ctx.reply(captionFinal, {
+                        parse_mode: 'HTML',
+                        ...tecladoReintento
+                    });
+                }
+
+            } else if (clasif.estado === 'MODAL_REGISTRO_ATASCADO') {
+                captionFinal =
+                    `⚠️ <b>MODAL REGISTRA TU LÍNEA ATASCADO</b>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
+                    `⚠️ ▫️ El modal de registro de línea no finalizó tras 15 segundos.\n` +
+                    `ℹ️ ▫️ No se realizó ningún cobro ni operación.\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `👉 <b>Toca /start para intentar de nuevo.</b>`;
+
+                if (captura) {
+                    await ctx.replyWithPhoto({ source: captura }, {
+                        caption: captionFinal.slice(0, 1024),
+                        parse_mode: 'HTML'
+                    });
+                } else {
+                    await ctx.replyWithHTML(captionFinal);
+                }
+
+            } else if (clasif.estado === 'EXITO' && info.pagoConfirmado === true) {
                 captionFinal =
                     `🦁 <b>BOT LEÓN — COMPROBANTE DE RECARGA EXITOSA</b> ✅\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -2064,46 +2825,36 @@ async function flujoBait(ctx, id, datos) {
 
             } else if (clasif.estado === 'RECHAZO_BANCARIO') {
                 const sPrev = sesiones.get(id) || {};
-                const intentos = (sPrev.intentosTarjeta || 0) + 1;
-                sPrev.intentosTarjeta = intentos;
-                sesiones.set(id, sPrev);
+                const ult4 = sPrev.ult4 || (sPrev.tarjeta ? sPrev.tarjeta.slice(-4) : '****');
+                sesiones.delete(id);
 
-                if (intentos >= 2) {
-                    sesiones.delete(id);
-                    captionFinal =
-                        `❌ <b>RECARGA NO COMPLETADA: MONTO / FONDOS INSUFICIENTES</b>\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                        `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                        `💡 <b>Motivo:</b> La segunda tarjeta no cuenta con fondos suficientes o fue rechazada por el banco.\n` +
-                        `🔄 <b>Reiniciando proceso...</b> Toca /start para comenzar de nuevo:`;
+                captionFinal =
+                    `❌ <b>RECARGA NO COMPLETADA: PAGO RECHAZADO</b>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+                    `💲 <b>Monto:</b> $${monto} MXN\n` +
+                    `💳 <b>Tarjeta:</b> <code>•••• ${ult4}</code>\n\n` +
+                    `💡 <b>Motivo:</b> Tu forma de pago rechazó el cargo o no cuenta con fondos suficientes.\n` +
+                    `⚠️ <i>Notificación: "Error al completar tu pago / Error interno"</i>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `🛑 <b>El proceso ha finalizado. Toca abajo para empezar de 0 el proceso:</b>`;
 
-                    if (captura) {
-                        await ctx.replyWithPhoto({ source: captura }, {
-                            caption: captionFinal.slice(0, 1024),
-                            parse_mode: 'HTML'
-                        });
-                    } else {
-                        await ctx.replyWithHTML(captionFinal);
-                    }
+                const tecladoReinicio = Markup.inlineKeyboard([
+                    [Markup.button.callback('🔄 REINTENTAR / EMPEZAR DE 0', 'btn_reiniciar')],
+                    [Markup.button.callback('🦁 IR AL MENÚ PRINCIPAL', 'btn_reiniciar')]
+                ]);
+
+                if (captura) {
+                    await ctx.replyWithPhoto({ source: captura }, {
+                        caption: captionFinal.slice(0, 1024),
+                        parse_mode: 'HTML',
+                        ...tecladoReinicio
+                    });
                 } else {
-                    captionFinal =
-                        `❌ <b>RECARGA NO COMPLETADA: MONTO / FONDOS INSUFICIENTES</b>\n` +
-                        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                        `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                        `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                        `💡 <b>Motivo:</b> La tarjeta no cuenta con el monto adecuado para realizar la recarga.\n\n` +
-                        `👉 <b>Escribe tu nueva tarjeta para reintentar:</b>\n` +
-                        `<code>16DÍGITOS|MM|AA|CVV</code>`;
-
-                    if (captura) {
-                        await ctx.replyWithPhoto({ source: captura }, {
-                            caption: captionFinal.slice(0, 1024),
-                            parse_mode: 'HTML'
-                        });
-                    } else {
-                        await ctx.replyWithHTML(captionFinal);
-                    }
+                    await ctx.reply(captionFinal, {
+                        parse_mode: 'HTML',
+                        ...tecladoReinicio
+                    });
                 }
 
             } else if (clasif.estado === 'PROCESANDO') {
@@ -2260,6 +3011,37 @@ bot.command('bait', async ctx => {
     return iniciarCompania(ctx, 'Bait');
 });
 
+// 🧪 COMANDO DIRECTO TELCEL ($10) — FLUJO COMPLETO HASTA RESULTADO FINAL
+bot.command('prueba10', async ctx => {
+    const id = ctx.chat?.id || ctx.from?.id;
+    await cerrarSesionNavegador(id);
+    await cerrarNavegadorBait(id);
+    await limpiarMensajesTemporales(ctx, id);
+
+    sesiones.set(id, { 
+        tipo: 'Telcel', 
+        modo: 'telcel', 
+        monto: 10, 
+        paso: 'numero', 
+        intentosTarjeta: 0 
+    });
+
+    logTelcel(id, `🚀 Iniciando flujo completo Telcel ($10) por /prueba10`);
+
+    const textoPaso2 = 
+        `🟢 <b>TELCEL — PASO 2 DE 3</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `✅ <b>Monto seleccionado:</b> $10 MXN\n\n` +
+        `📱 <b>ESCRIBE EL NÚMERO CELULAR (10 DÍGITOS):</b>\n` +
+        `▫️ Ejemplo: <code>5512345678</code>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `✍️ <b>Envía tu mensaje con el número:</b> `;
+
+    return enviarLimpio(ctx, textoPaso2, Markup.inlineKeyboard([
+        [Markup.button.callback('🔄 REINICIAR', 'btn_reiniciar'), Markup.button.callback('🛑 CANCELAR', 'btn_cancelar')]
+    ]));
+});
+
 // CALLBACKS DE BOTONES DEL MENÚ PRINCIPAL
 bot.action('btn_telcel', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
@@ -2274,6 +3056,21 @@ bot.action('btn_bait', async ctx => {
 bot.action('btn_reiniciar', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
     return mostrarMenuInicio(ctx, true);
+});
+
+bot.action('btn_reintentar_bait', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    const s = sesiones.get(id);
+    if (!s || !s.numero) {
+        return mostrarMenuInicio(ctx);
+    }
+    const datos = {
+        ...s,
+        numero: s.numero,
+        monto: s.monto || 300
+    };
+    return flujoBait(ctx, id, datos);
 });
 
 bot.action('btn_cancelar', async ctx => {
@@ -2485,7 +3282,7 @@ bot.on('text', async (ctx, next) => {
             `${icono} <b>${compania.toUpperCase()} — PASO 3 DE 3</b>\n` +
             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
             `✅ <b>Número confirmado:</b> <code>${s.numero}</code>\n` +
-            `💲 <b>Monto:</b> $${s.monto || 300} MXN\n\n` +
+            `💲 <b>Monto:</b> $${s.monto || 200} MXN\n\n` +
             `💳 <b>INGRESA TU TARJETA PARA PROCESAR EL PAGO:</b>\n` +
             `▫️ Formato: <code>16DÍGITOS|MM|AA|CVV</code>\n` +
             `▫️ Ejemplo: <code>4123567890123456|10|28|123</code>\n` +
@@ -2643,3 +3440,5 @@ function iniciarServidorYBot() {
 }
 
 iniciarServidorYBot();
+
+
