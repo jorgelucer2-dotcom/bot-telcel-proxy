@@ -1807,24 +1807,228 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
     }
 
     // 5. Llenar teléfono y correo con tipeo de teclado
-    const inputTel = modal.locator(BAIT_SEL.TEL).first();
-    await inputTel.waitFor({ state: 'visible', timeout: 8000 });
+  const inputTel = modal.locator(BAIT_SEL.TEL).first();
+
+await inputTel.waitFor({
+    state: 'visible',
+    timeout: 8000
+});
+
+const numeroBait = String(numero || '')
+    .replace(/\D/g, '')
+    .slice(0, 10);
+
+if (numeroBait.length !== 10) {
+    throw new Error(
+        `NUMERO_BAIT_LONGITUD_INVALIDA_${numeroBait.length}`
+    );
+}
+
+await inputTel.scrollIntoViewIfNeeded().catch(() => {});
+await inputTel.click({ force: true });
+await inputTel.fill('');
+
+await pag.waitForTimeout(200);
+
+console.log(
+    `[BAIT DEBUG] antes de escribir:`,
+    await inputTel.inputValue().catch(() => 'ERROR')
+);
+
+await inputTel.fill(numeroBait);
+
+await inputTel.dispatchEvent(
+    'input',
+    { bubbles: true }
+).catch(() => {});
+
+await inputTel.dispatchEvent(
+    'change',
+    { bubbles: true }
+).catch(() => {});
+
+await pag.waitForTimeout(300);
+
+let valorTelefono =
+    String(
+        await inputTel.inputValue().catch(() => '')
+    ).replace(/\D/g, '');
+
+console.log(
+    `[BAIT DEBUG] teléfono esperado=${numeroBait} valorReal=${valorTelefono} longitud=${valorTelefono.length}`
+);
+
+if (valorTelefono !== numeroBait) {
+
     await inputTel.click({ force: true });
     await inputTel.fill('');
-    await inputTel.pressSequentially(numero, { delay: 25 });
-    await inputTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
-    await inputTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
-    await inputTel.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-    const inputMail = modal.locator(BAIT_SEL.CORREO).first();
-    await inputMail.waitFor({ state: 'visible', timeout: 8000 });
+    await inputTel.evaluate(
+        (el, valor) => {
+            const setter =
+                Object.getOwnPropertyDescriptor(
+                    HTMLInputElement.prototype,
+                    'value'
+                )?.set;
+
+            if (setter) {
+                setter.call(el, valor);
+            } else {
+                el.value = valor;
+            }
+
+            el.dispatchEvent(
+                new Event('input', { bubbles: true })
+            );
+
+            el.dispatchEvent(
+                new Event('change', { bubbles: true })
+            );
+        },
+        numeroBait
+    );
+
+    await pag.waitForTimeout(300);
+
+    valorTelefono =
+        String(
+            await inputTel.inputValue().catch(() => '')
+        ).replace(/\D/g, '');
+
+    console.log(
+        `[BAIT DEBUG] segundo intento valorReal=${valorTelefono} longitud=${valorTelefono.length}`
+    );
+}
+
+if (valorTelefono !== numeroBait) {
+    throw new Error(
+        `BAIT_TELEFONO_NO_SE_ESCRIBIO_COMPLETO_${valorTelefono.length}_DE_10`
+    );
+}
+
+await inputTel.dispatchEvent(
+    'blur',
+    { bubbles: true }
+).catch(() => {});
+
+console.log(
+    `[Bait Usuario ${id}] ✅ Teléfono BAIT escrito correctamente (10/10)`
+);
+
+const inputMail = modal.locator(BAIT_SEL.CORREO).first();
+
+await inputMail.waitFor({
+    state: 'visible',
+    timeout: 8000
+});
+
+const correoBait = String(correo || '').trim();
+
+if (
+    !correoBait ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correoBait)
+) {
+    throw new Error('CORREO_BAIT_INVALIDO');
+}
+
+await inputMail.scrollIntoViewIfNeeded().catch(() => {});
+await inputMail.click({ force: true });
+await inputMail.fill('');
+
+await pag.waitForTimeout(200);
+
+console.log(
+    `[BAIT DEBUG] correo antes de escribir:`,
+    await inputMail.inputValue().catch(() => 'ERROR')
+);
+
+// Primer intento
+await inputMail.fill(correoBait);
+
+await inputMail.dispatchEvent(
+    'input',
+    { bubbles: true }
+).catch(() => {});
+
+await inputMail.dispatchEvent(
+    'change',
+    { bubbles: true }
+).catch(() => {});
+
+await pag.waitForTimeout(300);
+
+let valorCorreo =
+    String(
+        await inputMail.inputValue().catch(() => '')
+    ).trim();
+
+console.log(
+    `[BAIT DEBUG] correo esperado=${correoBait} valorReal=${valorCorreo}`
+);
+
+// Segundo intento si BAIT lo borró
+if (valorCorreo !== correoBait) {
+
+    console.log(
+        `[Bait Usuario ${id}] ⚠️ Correo no quedó escrito. Reintentando...`
+    );
+
     await inputMail.click({ force: true });
     await inputMail.fill('');
-    await inputMail.pressSequentially(correo, { delay: 15 });
-    await inputMail.dispatchEvent('input', { bubbles: true }).catch(() => {});
-    await inputMail.dispatchEvent('change', { bubbles: true }).catch(() => {});
-    await inputMail.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
+    await inputMail.evaluate(
+        (el, valor) => {
+
+            const setter =
+                Object.getOwnPropertyDescriptor(
+                    HTMLInputElement.prototype,
+                    'value'
+                )?.set;
+
+            if (setter) {
+                setter.call(el, valor);
+            } else {
+                el.value = valor;
+            }
+
+            el.dispatchEvent(
+                new Event('input', { bubbles: true })
+            );
+
+            el.dispatchEvent(
+                new Event('change', { bubbles: true })
+            );
+
+        },
+        correoBait
+    );
+
+    await pag.waitForTimeout(300);
+
+    valorCorreo =
+        String(
+            await inputMail.inputValue().catch(() => '')
+        ).trim();
+
+    console.log(
+        `[BAIT DEBUG] segundo intento correo=${valorCorreo}`
+    );
+}
+
+if (valorCorreo !== correoBait) {
+    throw new Error(
+        'BAIT_CORREO_NO_SE_ESCRIBIO_CORRECTAMENTE'
+    );
+}
+
+await inputMail.dispatchEvent(
+    'blur',
+    { bubbles: true }
+).catch(() => {});
+
+console.log(
+    `[Bait Usuario ${id}] ✅ Correo BAIT escrito correctamente`
+);
     await pag.waitForTimeout(400);
 
     const verifNumBait = await detectarNumeroInvalido(pag);
@@ -2155,144 +2359,144 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
 }
 
 async function detectarPasarelaBait(pag, id, intento = 1) {
-    console.log(`🔍 [Bait Usuario ${id}] (Intento ${intento}) Iniciando detección de pasarela`);
-    const inicio = Date.now();
-    const TIMEOUT_DETECCION_MS = 12000;
+    console.log(`🔎 [Bait Usuario ${id}] Procesando detección interna...`);
 
-    let pasarelaProvisional = 'NINGUNA';
+    const inicio = Date.now();
+    const TIMEOUT_DETECCION_MS = 5000;
 
     while (Date.now() - inicio < TIMEOUT_DETECCION_MS) {
         const contexto = pag.context();
         const paginasActivas = contexto ? contexto.pages() : [pag];
+
         const popup = popupsActivosBait.get(id);
-        const paginasARevisar = (popup && !popup.isClosed() && !paginasActivas.includes(popup))
-            ? [...paginasActivas, popup]
-            : paginasActivas;
 
-        let framesPayPalCandidatos = [];
-        let framesConektaCandidatos = [];
+        const paginasARevisar =
+            popup &&
+            !popup.isClosed() &&
+            !paginasActivas.includes(popup)
+                ? [...paginasActivas, popup]
+                : paginasActivas;
 
-        // 1. EVALUAR FRAMES TÉCNICOS REALES (Mayor prioridad, ignorando prerender)
+        // =====================================================
+        // 1. PAYPAL — PRIORIDAD MÁXIMA
+        // =====================================================
         for (const p of paginasARevisar) {
             const frames = p.frames ? p.frames() : [p];
 
             for (const f of frames) {
                 if (esFramePrerender(f)) continue;
 
-                const fUrl = (f.url() || '').toLowerCase();
-                const fName = (f.name() || '').toLowerCase();
+                const fUrl = String(f.url() || '').toLowerCase();
+                const fName = String(f.name() || '').toLowerCase();
 
-                // Evidencia técnica de PAYPAL
-                if (fUrl.includes('paypal.com/smart/buttons') || fUrl.includes('smart/buttons') || fName.includes('paypal_buttons') || fUrl.includes('paypal.com/smart/card-fields') || fUrl.includes('smart/card-fields')) {
-                    framesPayPalCandidatos.push(f);
-                }
+                const esPayPal =
+                    fUrl.includes('paypal.com/smart/buttons') ||
+                    fUrl.includes('smart/buttons') ||
+                    fUrl.includes('paypal.com/smart/card-fields') ||
+                    fUrl.includes('smart/card-fields') ||
+                    fName.includes('paypal_buttons') ||
+                    fName.includes('paypal_card_form');
 
-                // Evidencia técnica de CONEKTA
-                if (fName.includes('conekta_embedded_checkout') || fUrl.includes('conekta') || fName.includes('conekta')) {
-                    framesConektaCandidatos.push(f);
+                if (esPayPal) {
+                    const tiempo = Date.now() - inicio;
+
+                    console.log(
+                        `✅ [Bait Usuario ${id}] PAYPAL confirmado en ${tiempo} ms`
+                    );
+
+                    return {
+                        pasarela: 'PAYPAL',
+                        confirmada: true
+                    };
                 }
             }
         }
 
-        const cantPP = framesPayPalCandidatos.length;
-        const cantCK = framesConektaCandidatos.length;
-
-        if (cantPP > 0 && cantCK > 0) {
-            console.log(`Frames candidatos PAYPAL: ${cantPP}`);
-            console.log(`Frames candidatos CONEKTA: ${cantCK}`);
-            console.log(`Pasarela provisional: SIMULTANEA — esperando hasta 2s para estabilizar...`);
-            await pag.waitForTimeout(2000);
-
-            // Re-enumerar frames tras la espera adicional
-            const ctx2 = pag.context();
-            const pags2 = ctx2 ? ctx2.pages() : [pag];
-            let ppFinal = [];
-            let ckFinal = [];
-
-            for (const p of pags2) {
-                const frms = p.frames ? p.frames() : [p];
-                for (const f of frms) {
-                    if (esFramePrerender(f)) continue;
-                    const u = (f.url() || '').toLowerCase();
-                    const n = (f.name() || '').toLowerCase();
-                    if (u.includes('smart/buttons') || n.includes('paypal_buttons') || u.includes('smart/card-fields')) ppFinal.push(f);
-                    if (n.includes('conekta_embedded_checkout') || u.includes('conekta') || n.includes('conekta')) ckFinal.push(f);
-                }
-            }
-
-            console.log(`Frames candidatos PAYPAL: ${ppFinal.length}`);
-            console.log(`Frames candidatos CONEKTA: ${ckFinal.length}`);
-
-            if (ppFinal.length > 0) {
-                console.log(`Pasarela definitiva: PAYPAL`);
-                return { pasarela: 'PAYPAL', confirmada: true };
-            } else if (ckFinal.length > 0) {
-                console.log(`Pasarela definitiva: CONEKTA`);
-                return { estado: 'PASARELA_NO_ADMITIDA', pasarela: 'CONEKTA', confirmada: true, exito: false, pagoConfirmado: false };
-            }
-        } else if (cantPP > 0) {
-            console.log(`Frames candidatos PAYPAL: ${cantPP}`);
-            console.log(`Frames candidatos CONEKTA: ${cantCK}`);
-            console.log(`Pasarela definitiva: PAYPAL`);
-            return { pasarela: 'PAYPAL', confirmada: true };
-        } else if (cantCK > 0) {
-            console.log(`Frames candidatos PAYPAL: ${cantPP}`);
-            console.log(`Frames candidatos CONEKTA: ${cantCK}`);
-            console.log(`Pasarela definitiva: CONEKTA`);
-            return { estado: 'PASARELA_NO_ADMITIDA', pasarela: 'CONEKTA', confirmada: true, exito: false, pagoConfirmado: false };
-        }
-
-        // 2. Si no hay frames aún, registrar pasarela provisional por URL principal
-        let urlPP = false;
-        let urlCK = false;
+        // =====================================================
+        // 2. CONEKTA
+        // =====================================================
         for (const p of paginasARevisar) {
-            const pUrl = (p.url() || '').toLowerCase();
-            if (pUrl.includes('paypal.com')) urlPP = true;
-            if (pUrl.includes('conekta.com') || pUrl.includes('conekta')) urlCK = true;
-        }
+            const frames = p.frames ? p.frames() : [p];
 
-        if (urlPP && !urlCK) {
-            pasarelaProvisional = 'PAYPAL';
-        } else if (urlCK && !urlPP) {
-            pasarelaProvisional = 'CONEKTA';
-        }
+            for (const f of frames) {
+                if (esFramePrerender(f)) continue;
 
-        // 3. Texto visible del body (menor prioridad, solo provisional)
-        if (pasarelaProvisional === 'NINGUNA') {
-            for (const p of paginasARevisar) {
-                const txt = await p.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
-                if (/paypal/i.test(txt) && !/conekta/i.test(txt)) {
-                    pasarelaProvisional = 'PAYPAL';
-                } else if (/conekta|paga seguro con|spei|oxxo/i.test(txt) && !/paypal/i.test(txt)) {
-                    pasarelaProvisional = 'CONEKTA';
+                const fUrl = String(f.url() || '').toLowerCase();
+                const fName = String(f.name() || '').toLowerCase();
+
+                const esConekta =
+                    fUrl.includes('conekta') ||
+                    fName.includes('conekta') ||
+                    fName.includes('conekta_embedded_checkout');
+
+                if (esConekta) {
+                    const tiempo = Date.now() - inicio;
+
+                    console.log(
+                        `🟠 [Bait Usuario ${id}] CONEKTA confirmada en ${tiempo} ms`
+                    );
+
+                    return {
+                        estado: 'PASARELA_NO_ADMITIDA',
+                        pasarela: 'CONEKTA',
+                        confirmada: true,
+                        exito: false,
+                        pagoConfirmado: false
+                    };
                 }
             }
         }
 
+        // =====================================================
+        // 3. OPENPAY
+        // =====================================================
+        for (const p of paginasARevisar) {
+            const openPayVisible = await p
+                .locator(
+                    'o-payment-gateway, .payment-gateway-container'
+                )
+                .first()
+                .isVisible({
+                    timeout: 80
+                })
+                .catch(() => false);
+
+            if (openPayVisible) {
+                const tiempo = Date.now() - inicio;
+
+                console.log(
+                    `🔵 [Bait Usuario ${id}] OPENPAY confirmado en ${tiempo} ms`
+                );
+
+                return {
+                    estado: 'PASARELA_NO_ADMITIDA',
+                    pasarela: 'OPENPAY',
+                    confirmada: true,
+                    exito: false,
+                    pagoConfirmado: false
+                };
+            }
+        }
+
+        // Todavía está cargando.
+        // Revisar otra vez rápidamente.
         await pag.waitForTimeout(150);
     }
 
-    // Diagnóstico final tras 12 segundos sin pasarela confirmada
-    const contexto = pag.context();
-    const paginasActivas = contexto ? contexto.pages() : [pag];
-    const numPags = paginasActivas.length;
-    const numFrames = pag.frames ? pag.frames().length : 0;
-    const urlFinal = pag.url() || '';
-    const txtFinal = await pag.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
+    const tiempoTotal = Date.now() - inicio;
 
-    console.log(`Frames candidatos PAYPAL: 0`);
-    console.log(`Frames candidatos CONEKTA: 0`);
-    console.log(`Pasarela provisional: ${pasarelaProvisional}`);
-    console.log(`⏱️ [Bait Usuario ${id}] SIN PASARELA CONFIRMADA`);
-    console.log(`🌐 URL final: ${truncar(urlFinal)}`);
-    console.log(`📄 páginas: ${numPags}`);
-    console.log(`🧩 frames: ${numFrames}`);
-    console.log(`📝 texto visible resumido: "${truncar(txtFinal, 180)}"`);
-    console.log(`Pasarela definitiva: TIMEOUT`);
+    console.log(
+        `⏱️ [Bait Usuario ${id}] No se confirmó pasarela en ${tiempoTotal} ms`
+    );
 
-    return { estado: 'PASARELA_NO_DETERMINADA', pasarela: 'TIMEOUT', confirmada: false, exito: false, pagoConfirmado: false };
+    return {
+        estado: 'PASARELA_NO_DETERMINADA',
+        pasarela: 'TIMEOUT',
+        confirmada: false,
+        exito: false,
+        pagoConfirmado: false
+    };
 }
-
 // 7. DIAGNÓSTICO Y ELEMENTOS INTERNOS DE PAYPAL
 async function paso3DiagnosticoYElementosPayPalBait(pag, id, datos, monto = 300) {
     const popup = popupsActivosBait.get(id);
@@ -3297,6 +3501,7 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
 async function flujoBait(ctx, id, datos) {
     const { numero, monto: montoIn } = datos;
     const monto = montoIn || 300;
+    const inicioBait = Date.now();
 
     const miId = (ejecucionesUsuario.get(id) || 0) + 1;
     ejecucionesUsuario.set(id, miId);
@@ -3357,12 +3562,7 @@ async function flujoBait(ctx, id, datos) {
                 return;
             }
             
-            let captura = resultadoFinal.captura;
-            if (!captura && pag && !pag.isClosed()) {
-                try {
-                    captura = await tomarCapturaEnfocada(pag);
-                } catch(e) {}
-            }
+          let captura = resultadoFinal.captura || null;
 
             await limpiarMensajesTemporales(ctx, id);
 
@@ -3381,14 +3581,7 @@ async function flujoBait(ctx, id, datos) {
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                     `👉 <b>Toca /start para realizar otra operación.</b>`;
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML'
-                    });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
+              await ctx.replyWithHTML(captionFinal);
 
             } else if (['PASARELA_NO_ADMITIDA', 'CONEKTA_DETECTADO', 'PASARELA_NO_DETERMINADA', 'PASARELA_TIMEOUT', 'ERROR_BAIT_TEMPORAL', 'BAIT_HOME_NO_CARGO', 'PAQUETE_BAIT_NO_VISIBLE', 'MODAL_BAIT_NO_ABRIO', 'BOTON_AVANCE_NO_HABILITADO'].includes(clasif.estado)) {
                 const s = sesiones.get(id) || {};
@@ -3410,58 +3603,67 @@ async function flujoBait(ctx, id, datos) {
                     [Markup.button.callback('🦁 IR AL MENÚ PRINCIPAL', 'btn_reiniciar')]
                 ]);
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML',
-                        ...tecladoReintento
-                    });
-                } else {
-                    await ctx.reply(captionFinal, {
-                        parse_mode: 'HTML',
-                        ...tecladoReintento
-                    });
-                }
+    await ctx.reply(captionFinal, {
+    parse_mode: 'HTML',
+    ...tecladoReintento
+});
 
-            } else if (clasif.estado === 'MODAL_REGISTRO_ATASCADO') {
-                captionFinal =
-                    `⚠️ <b>MODAL REGISTRA TU LÍNEA ATASCADO</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                    `⚠️ ▫️ El modal de registro de línea no finalizó tras 15 segundos.\n` +
-                    `ℹ️ ▫️ No se realizó ningún cobro ni operación.\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `👉 <b>Toca /start para intentar de nuevo.</b>`;
+     } else if (clasif.estado === 'MODAL_REGISTRO_ATASCADO') {
+    captionFinal =
+        `⚠️ <b>MODAL REGISTRA TU LÍNEA ATASCADO</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+        `💲 <b>Monto:</b> $${monto} MXN\n\n` +
+        `⚠️ ▫️ El modal de registro de línea no finalizó tras 15 segundos.\n` +
+        `ℹ️ ▫️ No se realizó ningún cobro ni operación.\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `👉 <b>Toca /start para intentar de nuevo.</b>`;
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML'
-                    });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
+    await ctx.replyWithHTML(captionFinal);
 
-            } else if (clasif.estado === 'EXITO' && info.pagoConfirmado === true) {
-                captionFinal =
-                    `🦁 <b>BOT LEÓN — COMPROBANTE DE RECARGA EXITOSA</b> ✅\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n` +
-                    `✅ <b>Estado:</b> Recarga aprobada y aplicada\n` +
-                    `📄 <b>Folio / Ticket:</b> "<i>${fragmento}</i>"\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `👉 <b>Toca /start para realizar otra recarga.</b>`;
+} else if (clasif.estado === 'EXITO' && info.pagoConfirmado === true) {
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML'
-                    });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
+    if (!captura && pag && !pag.isClosed()) {
+        try {
+            captura = await tomarCapturaEnfocada(pag);
+        } catch(e) {}
+    }
+
+    const totalSegundos = Math.max(
+        0,
+        Math.round((Date.now() - inicioBait) / 1000)
+    );
+
+    const minutos = Math.floor(totalSegundos / 60);
+    const segundos = totalSegundos % 60;
+
+    const tiempoTexto =
+        minutos > 0
+            ? `${minutos} min ${segundos} s`
+            : `${segundos} s`;
+
+    captionFinal =
+        `🦁 <b>BOT LEÓN — COMPROBANTE DE RECARGA EXITOSA</b> ✅\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+        `💲 <b>Monto:</b> $${monto} MXN\n` +
+        `✅ <b>Estado:</b> Recarga aprobada y aplicada\n` +
+        `⏱️ <b>Tiempo total:</b> ${tiempoTexto}\n` +
+        `📄 <b>Folio / Ticket:</b> "<i>${fragmento}</i>"\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `👉 <b>Toca /start para realizar otra recarga.</b>`;
+
+    if (captura) {
+        await ctx.replyWithPhoto(
+            { source: captura },
+            {
+                caption: captionFinal.slice(0, 1024),
+                parse_mode: 'HTML'
+            }
+        );
+    } else {
+        await ctx.replyWithHTML(captionFinal);
+    }
 
             } else if (clasif.estado === 'RECHAZO_BANCARIO') {
                 const sPrev = sesiones.get(id) || {};
@@ -3484,89 +3686,59 @@ async function flujoBait(ctx, id, datos) {
                     [Markup.button.callback('🦁 IR AL MENÚ PRINCIPAL', 'btn_reiniciar')]
                 ]);
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML',
-                        ...tecladoReinicio
-                    });
-                } else {
-                    await ctx.reply(captionFinal, {
-                        parse_mode: 'HTML',
-                        ...tecladoReinicio
-                    });
-                }
+               await ctx.reply(captionFinal, {
+    parse_mode: 'HTML',
+    ...tecladoReinicio
+});
 
             } else if (clasif.estado === 'PROCESANDO') {
-                captionFinal =
-                    `⏳ <b>RECARGA EN PROCESO — PENDIENTE DE CONFIRMACIÓN</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n` +
-                    `📄 <b>Estado:</b> "<i>${fragmento}</i>"\n\n` +
-                    `ℹ️ ▫️ La solicitud fue recibida y se encuentra en validación por el sistema.\n` +
-                    `👉 <b>Toca /start para realizar otra operación.</b>`;
+    captionFinal =
+        `⏳ <b>RECARGA EN PROCESO — PENDIENTE DE CONFIRMACIÓN</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+        `💲 <b>Monto:</b> $${monto} MXN\n` +
+        `📄 <b>Estado:</b> "<i>${fragmento}</i>"\n\n` +
+        `ℹ️ ▫️ La solicitud fue recibida y se encuentra en validación por el sistema.\n` +
+        `👉 <b>Toca /start para realizar otra operación.</b>`;
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML'
-                    });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
+    await ctx.replyWithHTML(captionFinal);
 
-            } else {
-                captionFinal =
-                    (clasif.icono || '⚠️') + ` <b>` + clasif.titulo + `</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n` +
-                    `📄 <b>Detalle:</b> "<i>${fragmento}</i>"\n\n` +
-                    `⚠️ ▫️ La recarga no fue aprobada.\n` +
-                    `👉 <b>Toca /start para intentar de nuevo.</b>`;
+} else {
+    captionFinal =
+        (clasif.icono || '⚠️') + ` <b>` + clasif.titulo + `</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 <b>Línea:</b> <code>${numero}</code>\n` +
+        `💲 <b>Monto:</b> $${monto} MXN\n` +
+        `📄 <b>Detalle:</b> "<i>${fragmento}</i>"\n\n` +
+        `⚠️ ▫️ La recarga no fue aprobada.\n` +
+        `👉 <b>Toca /start para intentar de nuevo.</b>`;
 
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, {
-                        caption: captionFinal.slice(0, 1024),
-                        parse_mode: 'HTML'
-                    });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-            }
-
-            if (resultadoFinal.contexto) {
-                await cerrarContextoBait(resultadoFinal.contexto, id);
-            }
-
-        } else {
-            const capturaError = resultadoFinal?.captura;
-            await limpiarMensajesTemporales(ctx, id);
-            
-            const msgError = 
-                `❌ <b>NO SE PUDO COMPLETAR EL FLUJO BAIT</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `📱 <b>Número:</b> <code>${numero}</code>\n` +
-                `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                `📌 ▫️ Revisa tus datos e intenta de nuevo.\n` +
-                `👉 <b>Toca /start para reiniciar.</b>`;
-
-            if (capturaError) {
-                await ctx.replyWithPhoto({ source: capturaError }, {
-                    caption: msgError.slice(0, 1024),
-                    parse_mode: 'HTML'
-                });
-            } else {
-                await ctx.replyWithHTML(msgError);
-            }
-        }
-    } finally {
-        await cerrarNavegadorBait(id);
-    }
+    await ctx.replyWithHTML(captionFinal);
 }
 
+if (resultadoFinal.contexto) {
+    await cerrarContextoBait(resultadoFinal.contexto, id);
+}
 
+} else {
+    const capturaError = resultadoFinal?.captura;
+    await limpiarMensajesTemporales(ctx, id);
+
+    const msgError =
+        `❌ <b>NO SE PUDO COMPLETAR EL FLUJO BAIT</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 <b>Número:</b> <code>${numero}</code>\n` +
+        `💲 <b>Monto:</b> $${monto} MXN\n\n` +
+        `📌 ▫️ Revisa tus datos e intenta de nuevo.\n` +
+        `👉 <b>Toca /start para reiniciar.</b>`;
+
+await ctx.replyWithHTML(msgError);
+}
+
+} finally {
+    await cerrarNavegadorBait(id);
+}
+}
 // ==============================================================================
 // 🟣 TELCEL.COM / TIENDA TELCEL
 // https://www.telcel.com/tienda/recarga-saldo
@@ -5272,7 +5444,7 @@ bot.command(['stop', 'cancelar', 'reset'], async ctx => {
 });
 
 bot.command(['start', 'inicio', 'menu', 'ayuda'], async ctx => {
-    await mostrarMenuInicio(ctx, false);
+    return mostrarMenuCategoriasPrincipal(ctx);
 });
 
 bot.command('telcel', async ctx => {
@@ -5888,5 +6060,1016 @@ function iniciarServidorYBot() {
     iniciarTelegramBot();
 }
 
+// ==============================================================================
+// 🎬 STREAMING / NETFLIX
+// ==============================================================================
+
+// Estado Netflix aislado del sistema de recargas
+const sesionesNetflixStreaming = new Map();
+
+const URL_NETFLIX_STREAMING =
+    process.env.URL_NETFLIX ||
+    'https://www.netflix.com/mx/';
+
+
+// ------------------------------------------------------------------------------
+// GENERADORES NETFLIX
+// ------------------------------------------------------------------------------
+
+function netflixGenerarCorreo() {
+    const nombresNetflix = [
+        'carlos', 'maria', 'jorge', 'sofia',
+        'daniel', 'ana', 'miguel', 'valeria'
+    ];
+
+    const dominiosNetflix = [
+        'gmail.com',
+        'outlook.com',
+        'hotmail.com'
+    ];
+
+    const nombre =
+        nombresNetflix[
+            Math.floor(Math.random() * nombresNetflix.length)
+        ];
+
+    const numero =
+        Date.now().toString().slice(-6);
+
+    const dominio =
+        dominiosNetflix[
+            Math.floor(Math.random() * dominiosNetflix.length)
+        ];
+
+    return `${nombre}${numero}@${dominio}`;
+}
+
+
+function netflixGenerarPassword() {
+    const caracteres =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*';
+
+    let resultado = '';
+
+    for (let i = 0; i < 12; i++) {
+        resultado += caracteres[
+            Math.floor(Math.random() * caracteres.length)
+        ];
+    }
+
+    return resultado;
+}
+
+
+// ------------------------------------------------------------------------------
+// MENÚ PRINCIPAL NUEVO
+// RECARGAS / STREAMING
+// ------------------------------------------------------------------------------
+
+async function mostrarMenuCategoriasPrincipal(ctx) {
+
+    const id = ctx.chat?.id || ctx.from?.id;
+
+    await limpiarMensajesTemporales(ctx, id).catch(() => {});
+
+    const texto =
+        `🦁 <b>BOT LEÓN</b> 🤖\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `📂 <b>SELECCIONA UNA CATEGORÍA</b>\n\n` +
+        `💳 <b>RECARGAS</b>\n` +
+        `🎬 <b>STREAMING</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `👉 <b>Toca una opción:</b>`;
+
+    const teclado = Markup.inlineKeyboard([
+        [
+            Markup.button.callback(
+                '💳 RECARGAS',
+                'menu_recargas_categoria'
+            )
+        ],
+        [
+            Markup.button.callback(
+                '🎬 STREAMING',
+                'menu_streaming_categoria'
+            )
+        ]
+    ]);
+
+    return enviarLimpio(
+        ctx,
+        texto,
+        teclado
+    );
+}
+
+
+// ------------------------------------------------------------------------------
+// 💳 CARPETA RECARGAS
+// USA TUS CALLBACKS ORIGINALES
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'menu_recargas_categoria',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const texto =
+            `💳 <b>RECARGAS</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `Selecciona el servicio:\n\n` +
+            `🟢 Telcel Pay\n` +
+            `🔵 BAIT\n` +
+            `🟣 Recargas Telcel.com`;
+
+        return ctx.editMessageText(
+            texto,
+            {
+                parse_mode: 'HTML',
+
+                ...Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(
+                            '🟢 TELCEL PAY',
+                            'btn_telcel'
+                        ),
+
+                        Markup.button.callback(
+                            '🔵 BAIT',
+                            'btn_bait'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
+                            '🟣 RECARGAS TELCEL.COM',
+                            'btn_telcel_tienda'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
+                            '⬅️ ATRÁS',
+                            'menu_principal_categoria'
+                        )
+                    ]
+                ])
+            }
+        ).catch(() => mostrarMenuCategoriasPrincipal(ctx));
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 🎬 CARPETA STREAMING
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'menu_streaming_categoria',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const texto =
+            `🎬 <b>STREAMING</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `Selecciona el servicio:`;
+
+        return ctx.editMessageText(
+            texto,
+            {
+                parse_mode: 'HTML',
+
+                ...Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(
+                            '🎬 NETFLIX',
+                            'streaming_netflix'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
+                            '⬅️ ATRÁS',
+                            'menu_principal_categoria'
+                        )
+                    ]
+                ])
+            }
+        ).catch(() => mostrarMenuCategoriasPrincipal(ctx));
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// VOLVER AL MENÚ PRINCIPAL
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'menu_principal_categoria',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        await ctx.deleteMessage()
+            .catch(() => {});
+
+        return mostrarMenuCategoriasPrincipal(ctx);
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 🎬 NETFLIX
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'streaming_netflix',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        sesionesNetflixStreaming.set(
+            id,
+            {
+                paso: 'menu',
+                modo: null,
+                correo: null,
+                pass: null
+            }
+        );
+
+        const texto =
+            `🎬 <b>NETFLIX — MÉXICO</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `Selecciona cómo quieres preparar los datos:\n\n` +
+            `🎲 <b>AUTOMÁTICO</b>\n` +
+            `El bot genera correo y contraseña.\n\n` +
+            `✍️ <b>PERSONALIZADO</b>\n` +
+            `Tú escribes correo y contraseña.`;
+
+        return ctx.editMessageText(
+            texto,
+            {
+                parse_mode: 'HTML',
+
+                ...Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(
+                            '🎲 AUTOMÁTICO',
+                            'netflix_modo_auto'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
+                            '✍️ PERSONALIZADO',
+                            'netflix_modo_personal'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
+                            '⬅️ STREAMING',
+                            'menu_streaming_categoria'
+                        )
+                    ]
+                ])
+            }
+        );
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 🎲 NETFLIX AUTOMÁTICO
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'netflix_modo_auto',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        const correo =
+            netflixGenerarCorreo();
+
+        const pass =
+            netflixGenerarPassword();
+
+        sesionesNetflixStreaming.set(
+            id,
+            {
+                paso: 'listo',
+                modo: 'automatico',
+                correo,
+                pass
+            }
+        );
+
+        return ctx.editMessageText(
+            `🎲 <b>NETFLIX — MODO AUTOMÁTICO</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `📧 <b>Correo:</b>\n` +
+            `<code>${correo}</code>\n\n` +
+            `🔑 <b>Contraseña:</b>\n` +
+            `<code>${pass}</code>\n\n` +
+            `👉 Toca <b>ABRIR NETFLIX</b> para continuar.`,
+            {
+                parse_mode: 'HTML',
+
+                ...Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(
+                            '🚀 ABRIR NETFLIX',
+                            'netflix_abrir'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
+                            '⬅️ ATRÁS',
+                            'streaming_netflix'
+                        )
+                    ]
+                ])
+            }
+        );
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// ✍️ NETFLIX PERSONALIZADO
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'netflix_modo_personal',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        sesionesNetflixStreaming.set(
+            id,
+            {
+                paso: 'esperando_correo',
+                modo: 'personalizado',
+                correo: null,
+                pass: null
+            }
+        );
+
+        return ctx.editMessageText(
+            `✍️ <b>NETFLIX — PERSONALIZADO</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `📧 Escribe el <b>correo electrónico</b> ` +
+            `que deseas utilizar.`,
+            {
+                parse_mode: 'HTML'
+            }
+        );
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 📨 CAPTURAR CORREO/PASSWORD PERSONALIZADO
+//
+// IMPORTANTE:
+// Este middleware se ejecuta solamente cuando existe una sesión Netflix.
+// Si no hay sesión Netflix, deja pasar el mensaje al router original.
+// ------------------------------------------------------------------------------
+
+bot.on(
+    'text',
+    async (ctx, next) => {
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        const estado =
+            sesionesNetflixStreaming.get(id);
+
+        if (!estado) {
+            return next();
+        }
+
+        const texto =
+            (ctx.message?.text || '').trim();
+
+        if (texto.startsWith('/')) {
+            return next();
+        }
+
+        if (
+            estado.modo === 'personalizado' &&
+            estado.paso === 'esperando_correo'
+        ) {
+
+            if (
+                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(texto)
+            ) {
+
+                return ctx.reply(
+                    '⚠️ Escribe un correo electrónico válido.'
+                );
+            }
+
+            estado.correo = texto;
+            estado.paso = 'esperando_password';
+
+            sesionesNetflixStreaming.set(
+                id,
+                estado
+            );
+
+            return ctx.reply(
+                `🔑 <b>Ahora escribe la contraseña ` +
+                `que deseas utilizar para Netflix:</b>`,
+                {
+                    parse_mode: 'HTML'
+                }
+            );
+        }
+
+
+        if (
+            estado.modo === 'personalizado' &&
+            estado.paso === 'esperando_password'
+        ) {
+
+            if (texto.length < 8) {
+
+                return ctx.reply(
+                    '⚠️ La contraseña debe tener al menos 8 caracteres.'
+                );
+            }
+
+            estado.pass = texto;
+            estado.paso = 'listo';
+
+            sesionesNetflixStreaming.set(
+                id,
+                estado
+            );
+
+            return ctx.reply(
+                `✅ <b>DATOS NETFLIX LISTOS</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `📧 <b>Correo:</b>\n` +
+                `<code>${estado.correo}</code>\n\n` +
+                `🔑 <b>Contraseña:</b>\n` +
+                `<code>${estado.pass}</code>\n\n` +
+                `👉 Toca <b>ABRIR NETFLIX</b>.`,
+                {
+                    parse_mode: 'HTML',
+
+                    ...Markup.inlineKeyboard([
+                        [
+                            Markup.button.callback(
+                                '🚀 ABRIR NETFLIX',
+                                'netflix_abrir'
+                            )
+                        ],
+
+                        [
+                            Markup.button.callback(
+                                '❌ CANCELAR',
+                                'netflix_cancelar'
+                            )
+                        ]
+                    ])
+                }
+            );
+        }
+
+        return next();
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 🌐 ABRIR NETFLIX CON PLAYWRIGHT
+// SE DETIENE ANTES DE CUALQUIER PAGO
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'netflix_abrir',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        const estado =
+            sesionesNetflixStreaming.get(id);
+
+        if (
+            !estado ||
+            !estado.correo ||
+            !estado.pass
+        ) {
+
+            return ctx.reply(
+                '⚠️ Faltan los datos de Netflix.'
+            );
+        }
+
+        let navegadorNetflixLocal = null;
+
+        try {
+
+            await ctx.editMessageText(
+                `🎬 <b>NETFLIX</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `⏳ Abriendo Netflix...`,
+                {
+                    parse_mode: 'HTML'
+                }
+            ).catch(() => {});
+
+
+            navegadorNetflixLocal =
+                await chromium.launch({
+                    headless: ES_HEADLESS,
+
+                    args: [
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--lang=es-MX'
+                    ]
+                });
+
+
+            const contextoNetflix =
+                await navegadorNetflixLocal.newContext({
+                    locale: 'es-MX',
+
+                    timezoneId:
+                        'America/Mexico_City',
+
+                    viewport: {
+                        width: 1280,
+                        height: 800
+                    }
+                });
+
+
+            const paginaNetflix =
+                await contextoNetflix.newPage();
+
+
+            paginaNetflix.setDefaultTimeout(
+                30000
+            );
+
+            paginaNetflix.setDefaultNavigationTimeout(
+                45000
+            );
+
+
+            await paginaNetflix.goto(
+                URL_NETFLIX_STREAMING,
+                {
+                    waitUntil:
+                        'domcontentloaded',
+
+                    timeout:
+                        45000
+                }
+            );
+
+
+            const titulo =
+                await paginaNetflix.title()
+                    .catch(() => 'Netflix');
+
+
+            console.log(
+                `[Netflix Usuario ${id}] Página abierta: ${titulo}`
+            );
+
+
+            // ==========================================================
+            // 🎬 NETFLIX — REGISTRO HASTA LA PANTALLA DE PAGO
+            // ==========================================================
+
+            console.log(
+                `[Netflix Usuario ${id}] Iniciando registro`
+            );
+
+
+            // ----------------------------------------------------------
+            // 1. CERRAR COOKIES / AVISO SI APARECE
+            // ----------------------------------------------------------
+
+            const cerrarAviso = paginaNetflix.locator(
+                'button[aria-label="Cerrar"], ' +
+                'button:has-text("Aceptar"), ' +
+                '.privacy-prefs-close-btn'
+            ).first();
+
+
+            if (
+                await cerrarAviso
+                    .isVisible({ timeout: 3000 })
+                    .catch(() => false)
+            ) {
+
+                await cerrarAviso
+                    .click()
+                    .catch(() => {});
+
+                console.log(
+                    `[Netflix Usuario ${id}] ✅ Aviso cerrado`
+                );
+            }
+
+
+            // ----------------------------------------------------------
+            // 2. CORREO
+            // ----------------------------------------------------------
+
+            const campoCorreo = paginaNetflix.locator(
+                'input[name="email"], ' +
+                'input[type="email"], ' +
+                'input[placeholder*="Email"], ' +
+                'input[placeholder*="correo"]'
+            ).first();
+
+
+            await campoCorreo.waitFor({
+                state: 'visible',
+                timeout: 30000
+            });
+
+
+            await campoCorreo.fill(
+                estado.correo
+            );
+
+
+            console.log(
+                `[Netflix Usuario ${id}] ✅ Correo ingresado`
+            );
+
+
+            // ----------------------------------------------------------
+            // 3. COMENZAR / CONTINUAR
+            // ----------------------------------------------------------
+
+            const btnComenzar = paginaNetflix.locator(
+                'button:has-text("Comenzar"), ' +
+                'button:has-text("Continuar"), ' +
+                'button[data-uia="our-story-cta"]'
+            ).first();
+
+
+            await btnComenzar.waitFor({
+                state: 'visible',
+                timeout: 15000
+            });
+
+
+            await btnComenzar.click();
+
+
+            console.log(
+                `[Netflix Usuario ${id}] ✅ Continuó después del correo`
+            );
+
+
+            await paginaNetflix.waitForTimeout(3000);
+
+
+            // ----------------------------------------------------------
+            // 4. SI NETFLIX EXIGE VERIFICACIÓN
+            // ----------------------------------------------------------
+
+            const telefono = paginaNetflix.locator(
+                'input[type="tel"]'
+            ).first();
+
+
+            if (
+                await telefono
+                    .isVisible({ timeout: 1500 })
+                    .catch(() => false)
+            ) {
+
+                const capturaVerificacion =
+                    await paginaNetflix.screenshot({
+                        fullPage: false
+                    }).catch(() => null);
+
+
+                if (capturaVerificacion) {
+
+                    await ctx.replyWithPhoto(
+                        {
+                            source: capturaVerificacion
+                        },
+                        {
+                            caption:
+                                `⚠️ NETFLIX SOLICITA VERIFICACIÓN\n\n` +
+                                `📧 ${estado.correo}\n\n` +
+                                `👉 Completa la verificación requerida.`
+                        }
+                    ).catch(() => {});
+                }
+
+
+                return;
+            }
+
+
+            // ----------------------------------------------------------
+            // 5. CREAR CONTRASEÑA / SIGUIENTE
+            // ----------------------------------------------------------
+
+            const btnCrearPass = paginaNetflix.locator(
+                'button:has-text("Crear contraseña"), ' +
+                'button:has-text("Siguiente"), ' +
+                'button:has-text("Continuar")'
+            ).first();
+
+
+            if (
+                await btnCrearPass
+                    .isVisible({ timeout: 5000 })
+                    .catch(() => false)
+            ) {
+
+                await btnCrearPass
+                    .click()
+                    .catch(() => {});
+
+
+                await paginaNetflix.waitForTimeout(
+                    2000
+                );
+            }
+
+
+            // ----------------------------------------------------------
+            // 6. CONTRASEÑA
+            // ----------------------------------------------------------
+
+            const campoPass = paginaNetflix.locator(
+                'input[type="password"], ' +
+                'input[name="password"], ' +
+                'input[placeholder*="Contraseña"]'
+            ).first();
+
+
+            await campoPass.waitFor({
+                state: 'visible',
+                timeout: 25000
+            });
+
+
+            await campoPass.fill(
+                estado.pass
+            );
+
+
+            console.log(
+                `[Netflix Usuario ${id}] ✅ Contraseña ingresada`
+            );
+
+
+            // ----------------------------------------------------------
+            // 7. CONTINUAR
+            // ----------------------------------------------------------
+
+            const btnSigPass = paginaNetflix.locator(
+                'button:has-text("Siguiente"), ' +
+                'button:has-text("Continuar")'
+            ).first();
+
+
+            await btnSigPass.waitFor({
+                state: 'visible',
+                timeout: 15000
+            });
+
+
+            await btnSigPass.click();
+
+
+            console.log(
+                `[Netflix Usuario ${id}] ✅ Continuó después de contraseña`
+            );
+
+
+            await paginaNetflix.waitForTimeout(
+                3000
+            );
+
+
+            // ----------------------------------------------------------
+            // 8. AVANZAR HACIA LOS PLANES
+            // ----------------------------------------------------------
+
+            const btnPlanes = paginaNetflix.locator(
+                'button:has-text("Ver los planes"), ' +
+                'button:has-text("Siguiente"), ' +
+                'button:has-text("Continuar")'
+            ).first();
+
+
+            if (
+                await btnPlanes
+                    .isVisible({ timeout: 5000 })
+                    .catch(() => false)
+            ) {
+
+                await btnPlanes
+                    .click()
+                    .catch(() => {});
+
+
+                console.log(
+                    `[Netflix Usuario ${id}] ✅ Avanzando a planes`
+                );
+
+
+                await paginaNetflix.waitForTimeout(
+                    2500
+                );
+            }
+
+
+            // ----------------------------------------------------------
+            // 9. DETECTAR HASTA DÓNDE LLEGÓ
+            // ----------------------------------------------------------
+
+            const textoNetflix =
+                await paginaNetflix
+                    .locator('body')
+                    .innerText()
+                    .catch(() => '');
+
+
+            const llegoPago =
+                /tarjeta de crédito|tarjeta de débito|forma de pago|método de pago|elige cómo pagar/i
+                    .test(textoNetflix);
+
+
+            const captura =
+                await paginaNetflix.screenshot({
+                    fullPage: false
+                }).catch(() => null);
+
+
+            if (llegoPago) {
+
+                console.log(
+                    `[Netflix Usuario ${id}] ✅ Llegó a pantalla de pago`
+                );
+
+
+                if (captura) {
+
+                    await ctx.replyWithPhoto(
+                        {
+                            source: captura
+                        },
+                        {
+                            caption:
+                                `✅ NETFLIX — REGISTRO AVANZADO\n\n` +
+                                `📧 ${estado.correo}\n\n` +
+                                `✅ Correo ingresado\n` +
+                                `✅ Contraseña ingresada\n` +
+                                `✅ Llegó hasta la pantalla de pago\n\n` +
+                                `💳 Completa el pago manualmente.`
+                        }
+                    ).catch(() => {});
+
+                } else {
+
+                    await ctx.reply(
+                        `✅ <b>NETFLIX — REGISTRO AVANZADO</b>\n\n` +
+                        `📧 <code>${estado.correo}</code>\n\n` +
+                        `✅ Llegó hasta la pantalla de pago.`,
+                        {
+                            parse_mode: 'HTML'
+                        }
+                    ).catch(() => {});
+                }
+
+            } else {
+
+                console.log(
+                    `[Netflix Usuario ${id}] ⚠️ No se detectó todavía la pantalla de pago`
+                );
+
+
+                if (captura) {
+
+                    await ctx.replyWithPhoto(
+                        {
+                            source: captura
+                        },
+                        {
+                            caption:
+                                `⚠️ NETFLIX AVANZÓ, PERO NO SE DETECTÓ TODAVÍA LA PANTALLA DE PAGO.\n\n` +
+                                `📧 ${estado.correo}`
+                        }
+                    ).catch(() => {});
+                }
+            }
+
+
+        } catch (error) {
+
+            console.error(
+                `[Netflix Usuario ${id}] ERROR:`,
+                error.message || error
+            );
+
+
+            await ctx.reply(
+                `❌ <b>ERROR NETFLIX</b>\n\n` +
+                `<code>${String(
+                    error.message || error
+                ).slice(0, 180)}</code>`,
+                {
+                    parse_mode: 'HTML'
+                }
+            ).catch(() => {});
+
+
+        } finally {
+
+            try {
+
+                if (navegadorNetflixLocal) {
+
+                    await navegadorNetflixLocal
+                        .close()
+                        .catch(() => {});
+                }
+
+            } catch (_) {}
+  
+    const sesionNetflix = sesionesNetflixStreaming.get(id);
+
+    if (sesionNetflix) {
+        sesionNetflix.pass = null;
+        sesionNetflix.correo = null;
+        sesionNetflix.paso = null;
+    }
+
+    sesionesNetflixStreaming.delete(id);
+
+    console.log(
+        `[Netflix Usuario ${id}] 🧹 Sesión Netflix reiniciada completamente`
+    );
+}
+}
+); 
+// ------------------------------------------------------------------------------
+// ❌ CANCELAR NETFLIX
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'netflix_cancelar',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        sesionesNetflixStreaming.delete(id);
+
+        return mostrarMenuCategoriasPrincipal(ctx);
+    }
+);
+
+// ==============================================================================
+// 🚀 INICIAR BOT
+// ==============================================================================
+
 iniciarServidorYBot();
+
 
