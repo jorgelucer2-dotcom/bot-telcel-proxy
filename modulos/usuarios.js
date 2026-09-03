@@ -1,147 +1,85 @@
-// ============================================================
-// 👥 BOT LEÓN - SISTEMA DE USUARIOS
-// ============================================================
+'use strict';
 
 const fs = require('fs');
 const path = require('path');
 
-// Administrador principal del Bot León
 const ADMIN_ID = 8354262550;
+const DATA_DIR = process.env.BOT_DATA_DIR || path.join(__dirname, '..', 'data');
+const USUARIOS_FILE = process.env.USUARIOS_FILE || path.join(DATA_DIR, 'usuarios.json');
 
-// Archivo donde se guardan los usuarios.
-// En Render puede usarse BOT_DATA_DIR o USUARIOS_FILE
-// para apuntar a almacenamiento persistente.
-const DATA_DIR =
-    process.env.BOT_DATA_DIR ||
-    path.join(__dirname, '..', 'data');
-
-const DATA_FILE =
-    process.env.USUARIOS_FILE ||
-    path.join(DATA_DIR, 'usuarios.json');
-
-function asegurarArchivoUsuarios() {
+function asegurarArchivo() {
     try {
-        if (!fs.existsSync(DATA_DIR)) {
-            fs.mkdirSync(DATA_DIR, { recursive: true });
-        }
-
-        if (!fs.existsSync(DATA_FILE)) {
-            fs.writeFileSync(
-                DATA_FILE,
-                JSON.stringify({ usuarios: [] }, null, 2),
-                'utf8'
-            );
+        fs.mkdirSync(path.dirname(USUARIOS_FILE), { recursive: true });
+        if (!fs.existsSync(USUARIOS_FILE)) {
+            fs.writeFileSync(USUARIOS_FILE, JSON.stringify({ usuarios: [] }, null, 2), 'utf8');
         }
     } catch (error) {
-        console.error('❌ [USUARIOS] Error creando archivo:', error.message);
+        console.error('[Usuarios] No se pudo preparar el archivo:', error.message || error);
     }
 }
 
 function cargarUsuarios() {
-    asegurarArchivoUsuarios();
-
+    asegurarArchivo();
     try {
-        const contenido = fs.readFileSync(DATA_FILE, 'utf8');
-        const datos = JSON.parse(contenido);
-
-        if (!Array.isArray(datos.usuarios)) {
-            return new Set();
-        }
-
-        return new Set(
-            datos.usuarios
-                .map(Number)
-                .filter(id => Number.isInteger(id) && id > 0 && id !== ADMIN_ID)
-        );
+        const raw = fs.readFileSync(USUARIOS_FILE, 'utf8');
+        const data = JSON.parse(raw || '{"usuarios":[]}');
+        const lista = Array.isArray(data) ? data : data.usuarios;
+        return new Set((Array.isArray(lista) ? lista : []).map(String).filter(id => /^\d+$/.test(id)));
     } catch (error) {
-        console.error('❌ [USUARIOS] Error leyendo usuarios:', error.message);
+        console.error('[Usuarios] No se pudo leer usuarios.json:', error.message || error);
         return new Set();
     }
 }
 
-function guardarUsuarios(usuarios) {
-    asegurarArchivoUsuarios();
-
-    const datos = {
-        usuarios: Array.from(usuarios)
-            .map(Number)
-            .filter(id => Number.isInteger(id) && id > 0 && id !== ADMIN_ID)
-            .sort((a, b) => a - b)
-    };
-
-    fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(datos, null, 2),
-        'utf8'
-    );
+function guardarUsuarios(setUsuarios) {
+    asegurarArchivo();
+    const lista = [...setUsuarios].map(String).filter(id => /^\d+$/.test(id));
+    fs.writeFileSync(USUARIOS_FILE, JSON.stringify({ usuarios: lista }, null, 2), 'utf8');
+    return lista;
 }
 
-const usuariosAutorizados = cargarUsuarios();
-
 function esAdmin(id) {
-    return Number(id) === ADMIN_ID;
+    return String(id || '') === String(ADMIN_ID);
 }
 
 function estaAutorizado(id) {
-    const userId = Number(id);
-
-    if (!Number.isInteger(userId)) return false;
-    if (esAdmin(userId)) return true;
-
-    return usuariosAutorizados.has(userId);
+    const sid = String(id || '');
+    return esAdmin(sid) || cargarUsuarios().has(sid);
 }
 
 function agregarUsuario(id) {
-    const userId = Number(id);
+    const sid = String(id || '').trim();
+    if (!/^\d+$/.test(sid)) return { ok: false, motivo: 'ID_INVALIDO' };
+    if (esAdmin(sid)) return { ok: true, agregado: false, admin: true };
 
-    if (!Number.isInteger(userId) || userId <= 0) {
-        throw new Error('El ID de Telegram no es válido.');
-    }
-
-    if (esAdmin(userId)) {
-        return { agregado: false, admin: true, id: userId };
-    }
-
-    if (usuariosAutorizados.has(userId)) {
-        return { agregado: false, existente: true, id: userId };
-    }
-
-    usuariosAutorizados.add(userId);
-    guardarUsuarios(usuariosAutorizados);
-
-    return { agregado: true, id: userId };
+    const usuarios = cargarUsuarios();
+    const yaExiste = usuarios.has(sid);
+    usuarios.add(sid);
+    guardarUsuarios(usuarios);
+    return { ok: true, agregado: !yaExiste, id: sid };
 }
 
 function eliminarUsuario(id) {
-    const userId = Number(id);
+    const sid = String(id || '').trim();
+    if (!/^\d+$/.test(sid)) return { ok: false, motivo: 'ID_INVALIDO' };
+    if (esAdmin(sid)) return { ok: false, motivo: 'NO_SE_PUEDE_ELIMINAR_ADMIN' };
 
-    if (!Number.isInteger(userId) || userId <= 0) {
-        throw new Error('El ID de Telegram no es válido.');
-    }
-
-    if (esAdmin(userId)) {
-        throw new Error('No puedes eliminar al administrador principal.');
-    }
-
-    const eliminado = usuariosAutorizados.delete(userId);
-
-    if (eliminado) {
-        guardarUsuarios(usuariosAutorizados);
-    }
-
-    return { eliminado, id: userId };
+    const usuarios = cargarUsuarios();
+    const eliminado = usuarios.delete(sid);
+    guardarUsuarios(usuarios);
+    return { ok: true, eliminado, id: sid };
 }
 
 function listarUsuarios() {
-    return Array.from(usuariosAutorizados).sort((a, b) => a - b);
+    return [...cargarUsuarios()];
 }
 
 function totalUsuarios() {
-    return usuariosAutorizados.size;
+    return listarUsuarios().length;
 }
 
 function obtenerRutaUsuarios() {
-    return DATA_FILE;
+    return USUARIOS_FILE;
 }
 
 module.exports = {
