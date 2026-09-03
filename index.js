@@ -1211,14 +1211,16 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await btnFisica.click({ force: true }).catch(() => {});
                 }
 
-                // 4. ESPERA ACTIVA REDUCIDA (MÁXIMO 40s CON POLLING ACTIVO DE 500ms)
+                // 4. ESPERA ACTIVA ROBUSTA (MÁXIMO 65s; exige estado final estable antes de capturar)
                 ultimaEtapa = "Analizando respuesta y comprobante";
-                logTelcel(id, `⏳ Esperando confirmación/respuesta del portal (máx 40s)...`);
+                logTelcel(id, `⏳ Esperando confirmación/respuesta del portal (máx 65s)...`);
                 const inicioEspera = Date.now();
-                const TIEMPO_MAXIMO_ESPERA_TELCEL_MS = 40000;
+                const TIEMPO_MAXIMO_ESPERA_TELCEL_MS = 65000;
                 let textoFinalPagina = "";
                 let clasificacionFinal = null;
                 let ultimoEstadoLog = null;
+                let estadoFinalCandidato = null;
+                let repeticionesEstadoFinal = 0;
 
                 while (Date.now() - inicioEspera < TIEMPO_MAXIMO_ESPERA_TELCEL_MS) {
                     textoFinalPagina = await pagina.evaluate(() => {
@@ -1269,12 +1271,27 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                         logTelcel(id, `🔎 Estado detectado: ${clasificacionFinal.estado} en ${Date.now() - inicioEspera} ms`);
                     }
 
-                    // Solo los estados finales inequívocos terminan inmediatamente el polling (PROCESANDO continúa)
+                    // Un estado final debe mantenerse en varias lecturas antes de cerrar el polling.
+                    // Esto evita capturas tomadas durante una transición o mientras el icono final aún no termina de renderizar.
                     if (['EXITO', 'RECHAZO_BANCARIO', 'BLOQUEO_TELCEL', 'ERROR_TELCEL'].includes(clasificacionFinal.estado)) {
-                        break;
+                        if (estadoFinalCandidato === clasificacionFinal.estado) {
+                            repeticionesEstadoFinal += 1;
+                        } else {
+                            estadoFinalCandidato = clasificacionFinal.estado;
+                            repeticionesEstadoFinal = 1;
+                        }
+
+                        if (repeticionesEstadoFinal >= 3) {
+                            logTelcel(id, `✅ Estado final estable: ${clasificacionFinal.estado}. Esperando render visual final...`);
+                            await pagina.waitForTimeout(1500);
+                            break;
+                        }
+                    } else {
+                        estadoFinalCandidato = null;
+                        repeticionesEstadoFinal = 0;
                     }
 
-                    await pagina.waitForTimeout(500);
+                    await pagina.waitForTimeout(700);
                 }
 
                 if (!clasificacionFinal || clasificacionFinal.estado === 'DESCONOCIDO') {
@@ -1389,8 +1406,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                             `📱 <b>Línea:</b> <code>${numero}</code>\n` +
                             `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                            `📄 <b>Detalle:</b> "<i>${fragmentoLeido}</i>"\n\n` +
-                            `👉 <b>Toca /start para reiniciar.</b>`;
+                            `📄 <b>Mensaje detectado:</b> "<i>${fragmentoLeido}</i>"\n\n` +
+                            `ℹ️ <b>No se obtuvo una confirmación final confiable.</b>\n` +
+                            `🔎 Verifica el estado de la recarga antes de volver a intentar.`;
 
                         if (capturaVoucher) {
                             await ctx.replyWithPhoto({ source: capturaVoucher }, {
@@ -2578,7 +2596,8 @@ async function paso3DiagnosticoYElementosPayPalBait(pag, id, datos, monto = 300)
             pasarelaConfirmada: true,
             tipoResultado: 'RESULTADO_PAGO',
             clasificacion: resultadoCobro.clasificacion,
-            textoLeido: resultadoCobro.textoLeido
+            textoLeido: resultadoCobro.textoLeido,
+            captura: resultadoCobro.captura || null
         };
     } catch (errInterno) {
         console.log(`[Bait Usuario ${id}] ⚠️ Detalle en interacción interna PayPal: ${errInterno.message}.`);
@@ -3071,8 +3090,10 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
     let textoFinalPagina = "";
     let clasificacionFinal = null;
     let ultimoEstadoLog = null;
+    let estadoFinalCandidato = null;
+    let repeticionesEstadoFinal = 0;
     const inicioEsperaRespuesta = Date.now();
-    const TIEMPO_ESPERA_RESPUESTA_MS = 40000;
+    const TIEMPO_ESPERA_RESPUESTA_MS = 65000;
 
     while (Date.now() - inicioEsperaRespuesta < TIEMPO_ESPERA_RESPUESTA_MS) {
         const contexto = pag.context();
@@ -3142,10 +3163,24 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
         }
 
         if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA'].includes(clasificacionFinal.estado)) {
-            break;
+            if (estadoFinalCandidato === clasificacionFinal.estado) {
+                repeticionesEstadoFinal += 1;
+            } else {
+                estadoFinalCandidato = clasificacionFinal.estado;
+                repeticionesEstadoFinal = 1;
+            }
+
+            if (repeticionesEstadoFinal >= 3) {
+                console.log(`✅ [Bait Usuario ${id}] Estado final estable: ${clasificacionFinal.estado}. Esperando render visual final...`);
+                await pag.waitForTimeout(1500);
+                break;
+            }
+        } else {
+            estadoFinalCandidato = null;
+            repeticionesEstadoFinal = 0;
         }
 
-        await pag.waitForTimeout(500);
+        await pag.waitForTimeout(700);
     }
 
     if (!clasificacionFinal || clasificacionFinal.estado === 'DESCONOCIDO') {
@@ -3162,12 +3197,20 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
         };
     }
 
+    let capturaFinal = null;
+    if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA'].includes(clasificacionFinal.estado) && pag && !pag.isClosed()) {
+        // Pequeño colchón adicional para que el tache/círculo/comprobante termine de pintarse.
+        await pag.waitForTimeout(1200);
+        capturaFinal = await tomarCapturaEnfocada(pag).catch(() => null);
+    }
+
     return {
         exito: clasificacionFinal.estado === 'EXITO',
         pagoConfirmado: clasificacionFinal.estado === 'EXITO',
         botonPagarAhoraClickeado,
         clasificacion: clasificacionFinal,
-        textoLeido: extraerFragmentoClave(textoFinalPagina)
+        textoLeido: extraerFragmentoClave(textoFinalPagina),
+        captura: capturaFinal
     };
 }
 
@@ -3278,6 +3321,7 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
                 pag,
                 contexto,
                 datos: datosCompletos,
+                captura: resultadoFinalBait.captura || null,
                 resultado: resultadoFinalBait,
                 pasarelaDetectada: true
             };
@@ -3728,10 +3772,18 @@ async function flujoBait(ctx, id, datos) {
                     [Markup.button.callback('🦁 IR AL MENÚ PRINCIPAL', 'btn_reiniciar')]
                 ]);
 
-               await ctx.reply(captionFinal, {
-    parse_mode: 'HTML',
-    ...tecladoReinicio
-});
+               if (captura) {
+                   await ctx.replyWithPhoto({ source: captura }, {
+                       caption: captionFinal.slice(0, 1024),
+                       parse_mode: 'HTML',
+                       ...tecladoReinicio
+                   });
+               } else {
+                   await ctx.reply(captionFinal, {
+                       parse_mode: 'HTML',
+                       ...tecladoReinicio
+                   });
+               }
 
             } else if (clasif.estado === 'PROCESANDO') {
     captionFinal =
@@ -3751,11 +3803,19 @@ async function flujoBait(ctx, id, datos) {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `📱 <b>Línea:</b> <code>${numero}</code>\n` +
         `💲 <b>Monto:</b> $${monto} MXN\n` +
-        `📄 <b>Detalle:</b> "<i>${fragmento}</i>"\n\n` +
-        `⚠️ ▫️ La recarga no fue aprobada.\n` +
-        `👉 <b>Toca /start para intentar de nuevo.</b>`;
+        `📄 <b>Mensaje detectado:</b> "<i>${fragmento}</i>"\n\n` +
+        `🛑 <b>El flujo terminó sin una confirmación final confiable.</b>\n` +
+        `ℹ️ No se puede asegurar desde esta pantalla si la recarga fue aplicada o rechazada.\n` +
+        `🔎 <b>Verifica saldo, SMS o movimiento antes de volver a intentar.</b>`;
 
-    await ctx.replyWithHTML(captionFinal);
+    if (captura) {
+        await ctx.replyWithPhoto({ source: captura }, {
+            caption: captionFinal.slice(0, 1024),
+            parse_mode: 'HTML'
+        });
+    } else {
+        await ctx.replyWithHTML(captionFinal);
+    }
 }
 
 if (resultadoFinal.contexto) {
@@ -5022,7 +5082,7 @@ async function extraerDatosConfirmacionTienda(page, datos) {
     if (matchFolio && matchFolio[1]) {
         folioTelcel = matchFolio[1].trim();
     } else {
-        folioTelcel = String(Math.floor(100000 + Math.random() * 900000));
+        folioTelcel = 'No visible';
     }
 
     let fechaHora = '';
@@ -5030,13 +5090,7 @@ async function extraerDatosConfirmacionTienda(page, datos) {
     if (matchFecha && matchFecha[1]) {
         fechaHora = matchFecha[1].trim();
     } else {
-        const ahora = new Date();
-        const dia = String(ahora.getDate()).padStart(2, '0');
-        const mes = String(ahora.getMonth() + 1).padStart(2, '0');
-        const anio = ahora.getFullYear();
-        const hora = String(ahora.getHours()).padStart(2, '0');
-        const min = String(ahora.getMinutes()).padStart(2, '0');
-        fechaHora = `${dia}/${mes}/${anio} ${hora}:${min} h`;
+        fechaHora = 'No visible';
     }
 
     let vigencia = '';
@@ -5044,12 +5098,7 @@ async function extraerDatosConfirmacionTienda(page, datos) {
     if (matchVigencia && matchVigencia[1]) {
         vigencia = matchVigencia[1].trim();
     } else {
-        const fechaVig = new Date();
-        fechaVig.setDate(fechaVig.getDate() + 30);
-        const dV = String(fechaVig.getDate()).padStart(2, '0');
-        const mV = String(fechaVig.getMonth() + 1).padStart(2, '0');
-        const yV = fechaVig.getFullYear();
-        vigencia = `30 días, ${dV}/${mV}/${yV}`;
+        vigencia = 'No visible';
     }
 
     let nombrePaquete = `Amigo Sin Límite ${monto}`;
@@ -5069,53 +5118,78 @@ async function extraerDatosConfirmacionTienda(page, datos) {
 }
 
 async function monitorearRespuestaPagoTienda(page, tiempoClic, id) {
-    logTelcelTienda(id, `🔍 Monitoreando respuesta del portal de pagos...`);
-    const timeoutMaximo = 30000;
+    logTelcelTienda(id, `🔍 Monitoreando respuesta final del portal de pagos...`);
+    const timeoutMaximo = 65000;
     const inicio = Date.now();
+    let candidatoFinal = null;
+    let repeticionesFinal = 0;
+    let vioProcesando = false;
+
+    const confirmarFinal = async (tipo, extra = {}) => {
+        if (candidatoFinal === tipo) {
+            repeticionesFinal += 1;
+        } else {
+            candidatoFinal = tipo;
+            repeticionesFinal = 1;
+        }
+
+        if (repeticionesFinal < 3) return null;
+
+        // Esperar a que el icono/tache/círculo/comprobante termine de renderizar.
+        await page.waitForTimeout(1500);
+        const segundos = (Date.now() - tiempoClic) / 1000;
+        logTelcelTienda(id, `✅ Resultado final estable ${tipo} detectado en ${segundos.toFixed(1)}s`);
+        return { tipo, segundos, ...extra };
+    };
 
     while (Date.now() - inicio < timeoutMaximo) {
         let textoPagina = '';
         for (const frame of page.frames()) {
-            const txt = await frame.locator('body').innerText({ timeout: 500 }).catch(() => '');
+            const txt = await frame.locator('body').innerText({ timeout: 700 }).catch(() => '');
             if (txt) textoPagina += '\n' + txt;
         }
 
         const tiempoRespuestaSegundos = (Date.now() - tiempoClic) / 1000;
 
-        // Caso Éxito
-        if (/¡?Gracias por tu compra!?|Compra de paquete|Folio Telcel|comprobante por SMS|recarga exitosa|transacci[oó]n exitosa|recarga completada/i.test(textoPagina)) {
-            logTelcelTienda(id, `🎉 Éxito en el pago detectado en ${tiempoRespuestaSegundos.toFixed(1)}s`);
-            return {
-                tipo: 'EXITO',
-                segundos: tiempoRespuestaSegundos
-            };
+        // ÉXITO: sólo señales finales fuertes. Se evita "Compra de paquete" por ser texto que puede aparecer antes de terminar el cobro.
+        if (/¡?Gracias por tu compra!?|Folio Telcel\s*:?\s*[0-9A-Z]+|comprobante por SMS|recarga exitosa|transacci[oó]n exitosa|recarga completada|pago exitoso|pago aprobado|pago realizado/i.test(textoPagina)) {
+            const r = await confirmarFinal('EXITO');
+            if (r) return r;
         }
-
-        // Caso Error: Forma de pago no disponible
-        if (/Por el momento la forma de pago seleccionada no est[aá] disponible/i.test(textoPagina)) {
+        // RECHAZO BANCARIO / TACHE FINAL
+        else if (/pago rechazado|transacci[oó]n rechazada|tarjeta rechazada|tarjeta declinada|operaci[oó]n declinada|no autorizad[ao]|fondos insuficientes|saldo insuficiente|no se pudo completar (?:el|tu) pago|no pudimos procesar (?:el|tu) pago/i.test(textoPagina)) {
+            const r = await confirmarFinal('RECHAZO_BANCARIO');
+            if (r) return r;
+        }
+        // Forma de pago no disponible / círculo de aviso
+        else if (/Por el momento la forma de pago seleccionada no est[aá] disponible/i.test(textoPagina)) {
             const esRapido = tiempoRespuestaSegundos < 5.0;
-            logTelcelTienda(id, `⚠️ Forma de pago no disponible detectado en ${tiempoRespuestaSegundos.toFixed(1)}s (Rápido: ${esRapido})`);
-            return {
-                tipo: 'FORMA_PAGO_NO_DISPONIBLE',
-                esRapido,
-                segundos: tiempoRespuestaSegundos
-            };
+            const r = await confirmarFinal('FORMA_PAGO_NO_DISPONIBLE', { esRapido });
+            if (r) return r;
+        }
+        // Error de conexión / error final visible
+        else if (/error de conexi[oó]n|no pudimos conectar|fall[oó] la conexi[oó]n|problemas de conexi[oó]n|ocurri[oó] un error|int[eé]ntalo m[aá]s tarde/i.test(textoPagina)) {
+            const r = await confirmarFinal('ERROR_CONEXION');
+            if (r) return r;
+        }
+        // Mientras siga procesando NO se toma captura ni se finaliza.
+        else if (/estamos procesando tu pago|procesando tu pago|procesando|pago en proceso|transacci[oó]n en proceso|validando transacci[oó]n|espera un momento/i.test(textoPagina)) {
+            candidatoFinal = null;
+            repeticionesFinal = 0;
+            if (!vioProcesando) {
+                vioProcesando = true;
+                logTelcelTienda(id, `⏳ Telcel.com sigue procesando; esperando tache/círculo/comprobante final...`);
+            }
+        } else {
+            candidatoFinal = null;
+            repeticionesFinal = 0;
         }
 
-        // Caso Error: Conexión
-        if (/error de conexi[oó]n|no pudimos conectar|fall[oó] la conexi[oó]n|problemas de conexi[oó]n/i.test(textoPagina)) {
-            logTelcelTienda(id, `⚠️ Error de conexión detectado en ${tiempoRespuestaSegundos.toFixed(1)}s`);
-            return {
-                tipo: 'ERROR_CONEXION',
-                segundos: tiempoRespuestaSegundos
-            };
-        }
-
-        await page.waitForTimeout(400);
+        await page.waitForTimeout(700);
     }
 
     return {
-        tipo: 'TIMEOUT',
+        tipo: vioProcesando ? 'PROCESANDO_TIMEOUT' : 'TIMEOUT',
         segundos: (Date.now() - tiempoClic) / 1000
     };
 }
@@ -5231,9 +5305,15 @@ async function flujoTelcelTienda(ctx, id, datos) {
         // PASO 7: Monitorear respuesta de pago
         const resultado = await monitorearRespuestaPagoTienda(page, tiempoClic, id);
 
+        // Captura únicamente cuando existe un resultado final confirmado.
+        let capturaResultadoTienda = null;
+        if (['EXITO', 'RECHAZO_BANCARIO', 'FORMA_PAGO_NO_DISPONIBLE', 'ERROR_CONEXION'].includes(resultado.tipo) && page && !page.isClosed()) {
+            await page.waitForTimeout(1200);
+            capturaResultadoTienda = await tomarCapturaTienda(page, id, `resultado_${resultado.tipo.toLowerCase()}`).catch(() => null);
+        }
+
         if (resultado.tipo === 'EXITO') {
             const info = await extraerDatosConfirmacionTienda(page, datos);
-            const rutaConfirmacion = path.join(__dirname, 'assets', 'confirmacion.png');
 
             const textoExito = 
                 `🎉 <b>¡SU RECARGA FUE EXITOSA!</b> 🎉\n` +
@@ -5247,37 +5327,75 @@ async function flujoTelcelTienda(ctx, id, datos) {
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                 `✨ <i>Gracias por su preferencia.</i>`;
 
-            if (fs.existsSync(rutaConfirmacion)) {
+            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
                 await ctx.replyWithPhoto(
-                    { source: rutaConfirmacion },
-                    { caption: textoExito, parse_mode: 'HTML' }
+                    { source: capturaResultadoTienda },
+                    { caption: textoExito.slice(0, 1024), parse_mode: 'HTML' }
                 ).catch(() => {});
             } else {
                 await ctx.replyWithHTML(textoExito).catch(() => {});
             }
-        } else if (resultado.tipo === 'FORMA_PAGO_NO_DISPONIBLE') {
-            if (resultado.esRapido) {
-                await ctx.replyWithHTML(
-                    `⚠️ <b>ATENCIÓN — SERVICIO NO DISPONIBLE</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `La forma de pago no está disponible en este momento por posibles filtros de seguridad o lista negra.\n\n` +
-                    `👉 <b>Por favor intente realizar su recarga por otro medio.</b>`
-                ).catch(() => {});
+        } else if (resultado.tipo === 'RECHAZO_BANCARIO') {
+            const textoRechazo =
+                `❌ <b>PAGO RECHAZADO</b>
+` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+                `📱 <b>Línea:</b> <code>${numero}</code>
+` +
+                `💲 <b>Monto:</b> $${monto} MXN
+
+` +
+                `💳 El portal mostró un rechazo bancario definitivo.`;
+
+            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
+                await ctx.replyWithPhoto({ source: capturaResultadoTienda }, { caption: textoRechazo, parse_mode: 'HTML' }).catch(() => {});
             } else {
-                await ctx.replyWithHTML(
-                    `❌ <b>PAGO RECHAZADO POR EL BANCO</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `El banco emisor declinó la transacción (posible falta de fondos o tarjeta no autorizada).\n\n` +
-                    `👉 <b>Por favor verifique los fondos de su tarjeta o intente con otra.</b>`
-                ).catch(() => {});
+                await ctx.replyWithHTML(textoRechazo).catch(() => {});
+            }
+        } else if (resultado.tipo === 'FORMA_PAGO_NO_DISPONIBLE') {
+            const textoNoDisponible =
+                `⚠️ <b>FORMA DE PAGO NO DISPONIBLE</b>
+` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+                `El portal mostró que la forma de pago seleccionada no está disponible.
+
+` +
+                `👉 <b>Intenta nuevamente o utiliza otro medio.</b>`;
+
+            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
+                await ctx.replyWithPhoto({ source: capturaResultadoTienda }, { caption: textoNoDisponible, parse_mode: 'HTML' }).catch(() => {});
+            } else {
+                await ctx.replyWithHTML(textoNoDisponible).catch(() => {});
             }
         } else if (resultado.tipo === 'ERROR_CONEXION') {
-            await ctx.replyWithHTML(
-                `⚠️ <b>ERROR DE CONEXIÓN O FILTRO ACTIVO</b>\n` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                `No fue posible completar la transacción por problemas de conexión o bloqueo temporal.\n\n` +
-                `👉 <b>Por favor intente realizar su recarga por otro medio.</b>`
-            ).catch(() => {});
+            const textoConexion =
+                `⚠️ <b>TELCEL.COM — ERROR DE CONEXIÓN AL PROCESAR EL PAGO</b>
+` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+                `📱 <b>Línea:</b> <code>${numero}</code>
+` +
+                `💲 <b>Monto:</b> $${monto} MXN
+
+` +
+                `📄 <b>Mensaje del portal:</b>
+` +
+                `<i>“Se presentó un error de conexión al momento de procesar tu pago. Lamentamos el inconveniente, por favor espera unos minutos e intenta de nuevo.”</i>
+
+` +
+                `🛑 <b>Telcel interrumpió el flujo y no permitió continuar desde esa pantalla.</b>
+` +
+                `ℹ️ <b>Resultado:</b> No se obtuvo confirmación definitiva de pago aprobado o rechazado.
+` +
+                `🔎 <b>Antes de volver a intentar, verifica si la recarga o el cargo fueron aplicados.</b>`;
+
+            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
+                await ctx.replyWithPhoto({ source: capturaResultadoTienda }, { caption: textoConexion.slice(0, 1024), parse_mode: 'HTML' }).catch(() => {});
+            } else {
+                await ctx.replyWithHTML(textoConexion).catch(() => {});
+            }
         } else {
             await ctx.replyWithHTML(
                 `⏳ <b>RECARGA EN PROCESO</b>\n` +
@@ -7145,5 +7263,6 @@ bot.action(
 // ==============================================================================
 
 iniciarServidorYBot();
+
 
 
