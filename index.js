@@ -19,6 +19,20 @@ const { chromium } = require('playwright');
 require('dotenv').config();
 
 // ==============================================================================
+// 👥 SISTEMA PERSISTENTE DE USUARIOS / ADMINISTRACIÓN PRIVADA
+// ==============================================================================
+const {
+    ADMIN_ID,
+    esAdmin,
+    estaAutorizado,
+    agregarUsuario,
+    eliminarUsuario,
+    listarUsuarios
+} = require('./modulos/usuarios');
+
+const ADMIN_ID_STR = String(ADMIN_ID);
+
+// ==============================================================================
 // ⚙️ 1. CONFIGURACIÓN ÚNICA Y VARIABLES DE ENTORNO
 // ==============================================================================
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -98,10 +112,38 @@ function verificarAntiFlood(userId) {
 // ==============================================================================
 // 🔐 CONTROL DE ACCESO PRIVADO (SOLO USUARIOS AUTORIZADOS)
 // ==============================================================================
-const USUARIOS_AUTORIZADOS = new Set([
-    '8354262550', // Usuario principal / Admin
-    ...(process.env.ALLOWED_USERS ? process.env.ALLOWED_USERS.split(',').map(s => s.trim()) : [])
-]);
+const USUARIOS_AUTORIZADOS = new Set();
+
+function sincronizarUsuariosAutorizados() {
+    USUARIOS_AUTORIZADOS.clear();
+    USUARIOS_AUTORIZADOS.add(ADMIN_ID_STR);
+
+    for (const id of listarUsuarios()) {
+        USUARIOS_AUTORIZADOS.add(String(id));
+    }
+
+    // Compatibilidad con usuarios definidos por variable de entorno.
+    // Se cargan en memoria, pero los agregados desde Telegram se guardan en usuarios.json.
+    if (process.env.ALLOWED_USERS) {
+        for (const id of process.env.ALLOWED_USERS.split(',').map(v => v.trim()).filter(Boolean)) {
+            if (/^\d+$/.test(id)) USUARIOS_AUTORIZADOS.add(id);
+        }
+    }
+}
+
+function autorizarUsuarioPersistente(id) {
+    const resultado = agregarUsuario(id);
+    sincronizarUsuariosAutorizados();
+    return resultado;
+}
+
+function revocarUsuarioPersistente(id) {
+    const resultado = eliminarUsuario(id);
+    sincronizarUsuariosAutorizados();
+    return resultado;
+}
+
+sincronizarUsuariosAutorizados();
 
 // Middleware global de Telegraf para interceptar mensajes, comandos y callbacks
 bot.use(async (ctx, next) => {
@@ -5369,7 +5411,7 @@ async function mostrarMenuInicio(ctx, esReinicio = false) {
     ];
 
     // Botones exclusivos de gestión para el Administrador
-    if (String(id) === '8354262550') {
+    if (String(id) === ADMIN_ID_STR) {
         filasTeclado.push([
             Markup.button.callback('➕ AGREGAR USUARIO', 'btn_admin_add_user'),
             Markup.button.callback('👥 USUARIOS', 'btn_admin_ver_users')
@@ -5386,39 +5428,39 @@ async function mostrarMenuInicio(ctx, esReinicio = false) {
 }
 
 // 👮 COMANDOS DE ADMINISTRACIÓN PRIVADA (ADMIN: 8354262550)
-bot.command(['add_user', 'permitir', 'autorizar'], async ctx => {
+bot.command(['adduser', 'add_user', 'permitir', 'autorizar'], async ctx => {
     const adminId = String(ctx.from?.id || '');
-    if (adminId !== '8354262550') return;
+    if (adminId !== ADMIN_ID_STR) return;
 
     const nuevoId = ctx.message.text.split(/\s+/)[1]?.trim();
     if (!nuevoId || !/^\d+$/.test(nuevoId)) {
-        return ctx.reply('ℹ️ Uso: <code>/add_user &lt;id_telegram&gt;</code>', { parse_mode: 'HTML' });
+        return ctx.reply('ℹ️ Uso: <code>/adduser &lt;id_telegram&gt;</code>', { parse_mode: 'HTML' });
     }
 
-    USUARIOS_AUTORIZADOS.add(nuevoId);
-    console.log(`[Seguridad] Usuario ${nuevoId} agregado a autorizados por Admin ${adminId}`);
+    autorizarUsuarioPersistente(nuevoId);
+    console.log(`[Seguridad] Usuario ${nuevoId} agregado y guardado por Admin ${adminId}`);
     return ctx.reply(`✅ <b>Usuario Autorizado:</b> <code>${nuevoId}</code>`, { parse_mode: 'HTML' });
 });
 
-bot.command(['del_user', 'quitar', 'revocar'], async ctx => {
+bot.command(['deluser', 'del_user', 'quitar', 'revocar'], async ctx => {
     const adminId = String(ctx.from?.id || '');
-    if (adminId !== '8354262550') return;
+    if (adminId !== ADMIN_ID_STR) return;
 
     const idEliminar = ctx.message.text.split(/\s+/)[1]?.trim();
-    if (!idEliminar || idEliminar === '8354262550') {
+    if (!idEliminar || idEliminar === ADMIN_ID_STR) {
         return ctx.reply('⚠️ Especifica un ID válido (no puedes eliminar el ID principal).');
     }
 
-    USUARIOS_AUTORIZADOS.delete(idEliminar);
-    console.log(`[Seguridad] Usuario ${idEliminar} eliminado por Admin ${adminId}`);
+    revocarUsuarioPersistente(idEliminar);
+    console.log(`[Seguridad] Usuario ${idEliminar} eliminado y guardado por Admin ${adminId}`);
     return ctx.reply(`🗑️ <b>Usuario Revocado:</b> <code>${idEliminar}</code>`, { parse_mode: 'HTML' });
 });
 
-bot.command(['usuarios', 'lista_usuarios'], async ctx => {
+bot.command(['listusers', 'usuarios', 'lista_usuarios'], async ctx => {
     const adminId = String(ctx.from?.id || '');
-    if (adminId !== '8354262550') return;
+    if (adminId !== ADMIN_ID_STR) return;
 
-    const lista = Array.from(USUARIOS_AUTORIZADOS).map(u => `• <code>${u}</code> ${u === '8354262550' ? '👑 (Principal)' : ''}`).join('\n');
+    const lista = Array.from(USUARIOS_AUTORIZADOS).map(u => `• <code>${u}</code> ${u === ADMIN_ID_STR ? '👑 (Principal)' : ''}`).join('\n');
     return ctx.reply(`👥 <b>Lista de Usuarios Autorizados:</b>\n\n${lista}`, { parse_mode: 'HTML' });
 });
 
@@ -5645,7 +5687,7 @@ bot.action(['monto_200', 'monto_230', 'monto_300', 'monto_500'], async ctx => {
 // CALLBACKS DE ADMINISTRACIÓN DE USUARIOS (PANEL DIRECTO)
 bot.action('btn_admin_add_user', async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
-    if (String(id) !== '8354262550') return ctx.answerCbQuery();
+    if (String(id) !== ADMIN_ID_STR) return ctx.answerCbQuery();
     await ctx.answerCbQuery().catch(() => {});
     sesiones.set(id, { paso: 'esperando_id_usuario' });
 
@@ -5662,12 +5704,12 @@ bot.action('btn_admin_add_user', async ctx => {
 
 bot.action('btn_admin_ver_users', async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
-    if (String(id) !== '8354262550') return ctx.answerCbQuery();
+    if (String(id) !== ADMIN_ID_STR) return ctx.answerCbQuery();
     await ctx.answerCbQuery().catch(() => {});
 
     const botonesUsuarios = [];
     for (const u of USUARIOS_AUTORIZADOS) {
-        if (u === '8354262550') {
+        if (u === ADMIN_ID_STR) {
             botonesUsuarios.push([Markup.button.callback(`👑 ${u} (Tú / Principal)`, 'btn_noop')]);
         } else {
             botonesUsuarios.push([Markup.button.callback(`❌ Eliminar ${u}`, `btn_del_user_${u}`)]);
@@ -5694,18 +5736,18 @@ bot.action('btn_noop', async ctx => {
 
 bot.action(/^btn_del_user_(\d+)$/, async ctx => {
     const id = ctx.chat?.id || ctx.from?.id;
-    if (String(id) !== '8354262550') return ctx.answerCbQuery();
+    if (String(id) !== ADMIN_ID_STR) return ctx.answerCbQuery();
     const idEliminar = ctx.match[1];
-    if (idEliminar !== '8354262550') {
-        USUARIOS_AUTORIZADOS.delete(idEliminar);
-        console.log(`[Seguridad] Usuario ${idEliminar} eliminado por Admin ${id}`);
+    if (idEliminar !== ADMIN_ID_STR) {
+        revocarUsuarioPersistente(idEliminar);
+        console.log(`[Seguridad] Usuario ${idEliminar} eliminado y guardado por Admin ${id}`);
         await ctx.answerCbQuery(`✅ Usuario ${idEliminar} eliminado.`).catch(() => {});
     }
 
     // Actualizar vista de usuarios
     const botonesUsuarios = [];
     for (const u of USUARIOS_AUTORIZADOS) {
-        if (u === '8354262550') {
+        if (u === ADMIN_ID_STR) {
             botonesUsuarios.push([Markup.button.callback(`👑 ${u} (Tú / Principal)`, 'btn_noop')]);
         } else {
             botonesUsuarios.push([Markup.button.callback(`❌ Eliminar ${u}`, `btn_del_user_${u}`)]);
@@ -5739,8 +5781,8 @@ bot.on('text', async (ctx, next) => {
     // 0. GESTIÓN DIRECTA DE AGREGAR USUARIO POR BOTÓN
     if (s && s.paso === 'esperando_id_usuario') {
         if (/^\d{5,15}$/.test(txt)) {
-            USUARIOS_AUTORIZADOS.add(txt);
-            console.log(`[Seguridad] Usuario ${txt} autorizado por Admin ${id}`);
+            autorizarUsuarioPersistente(txt);
+            console.log(`[Seguridad] Usuario ${txt} autorizado y guardado por Admin ${id}`);
             sesiones.delete(id);
             return enviarLimpio(ctx,
                 `✅ <b>USUARIO AUTORIZADO CON ÉXITO</b>\n` +
@@ -6037,8 +6079,40 @@ function iniciarServidorYBot() {
         }
     }, INTERVALO_PING_MS);
 
+    async function configurarComandosTelegram() {
+        const comandosNormales = [
+            { command: 'start', description: 'Abrir menú principal' },
+            { command: 'menu', description: 'Abrir menú principal' },
+            { command: 'cancelar', description: 'Cancelar operación actual' }
+        ];
+
+        const comandosAdmin = [
+            ...comandosNormales,
+            { command: 'adduser', description: 'Agregar usuario autorizado' },
+            { command: 'deluser', description: 'Eliminar usuario autorizado' },
+            { command: 'listusers', description: 'Ver usuarios autorizados' }
+        ];
+
+        try {
+            // Usuarios normales solo ven comandos normales.
+            await bot.telegram.setMyCommands(comandosNormales, {
+                scope: { type: 'default' }
+            });
+
+            // En tu chat privado aparecen además los comandos administrativos.
+            await bot.telegram.setMyCommands(comandosAdmin, {
+                scope: { type: 'chat', chat_id: ADMIN_ID }
+            });
+
+            console.log('✅ [ADMIN] Comandos privados configurados para el administrador.');
+        } catch (error) {
+            console.warn('⚠️ [ADMIN] No se pudieron configurar los comandos visibles:', error.message || error);
+        }
+    }
+
     async function iniciarTelegramBot() {
         try {
+            await configurarComandosTelegram();
             await bot.launch({
                 dropPendingUpdates: true,
                 polling: {
