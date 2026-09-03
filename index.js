@@ -1778,8 +1778,16 @@ async function detectarErrorBaitVisible(pag, id) {
 
 // 5.1 APERTURA DE PAQUETE, MODAL, LLENADO Y AVANCE
 async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
-    // 1. Navegación inicial
-    await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+    // 1. Navegación inicial. No ocultamos el error: lo registramos y dejamos que
+    // la comprobación visual decida si la SPA de BAIT terminó de renderizar.
+    let respuestaHome = null;
+    try {
+        respuestaHome = await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        console.log(`🌐 [Bait Usuario ${id}] HOME BAIT HTTP ${respuestaHome ? respuestaHome.status() : 'SIN_STATUS'} — ${pag.url()}`);
+    } catch (eGoto) {
+        console.log(`⚠️ [Bait Usuario ${id}] Navegación inicial BAIT incompleta: ${(eGoto.message || eGoto).toString().slice(0, 180)}`);
+    }
+
     await aceptarCookiesBait(pag, id);
 
     // Comprobación temprana después de goto
@@ -1789,10 +1797,14 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
         throw err;
     }
 
-    // 2. Esperar app-card-recharge con detección continua de error temporal
+    // 2. Esperar la HOME real de BAIT. Antes dependía exclusivamente de
+    // <app-card-recharge>; ahora también aceptamos como señal válida que el
+    // paquete solicitado ya sea visible, por si BAIT cambia el wrapper Angular.
     const tInicioHome = Date.now();
-    const TIMEOUT_HOME_MS = 12000;
+    const TIMEOUT_HOME_MS = 20000;
     let homeCargo = false;
+    let senalHome = 'NINGUNA';
+    const selectoresPaqueteHome = getSelectoresPaqueteBait(monto);
 
     while (Date.now() - tInicioHome < TIMEOUT_HOME_MS) {
         if (await detectarErrorBaitVisible(pag, id)) {
@@ -1804,13 +1816,31 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
         const countCards = await pag.locator('app-card-recharge').count().catch(() => 0);
         if (countCards > 0) {
             const primerCard = pag.locator('app-card-recharge').first();
-            if (await primerCard.isVisible({ timeout: 100 }).catch(() => false)) {
+            if (await primerCard.isVisible({ timeout: 120 }).catch(() => false)) {
                 homeCargo = true;
+                senalHome = 'APP_CARD_RECHARGE';
                 break;
             }
         }
+
+        // Fallback conservador: si el wrapper cambió pero la tarjeta/imagen del
+        // monto solicitado sí está visible, la HOME está cargada y podemos seguir.
+        for (const sel of selectoresPaqueteHome) {
+            const visible = await pag.locator(sel).first().isVisible({ timeout: 80 }).catch(() => false);
+            if (visible) {
+                homeCargo = true;
+                senalHome = `PAQUETE_VISIBLE:${sel}`;
+                break;
+            }
+        }
+        if (homeCargo) break;
+
         await aceptarCookiesBait(pag, id);
-        await pag.waitForTimeout(200);
+        await pag.waitForTimeout(250);
+    }
+
+    if (homeCargo) {
+        console.log(`✅ [Bait Usuario ${id}] HOME BAIT detectada en ${Date.now() - tInicioHome} ms (${senalHome})`);
     }
 
     if (!homeCargo) {
@@ -1819,8 +1849,25 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
             err.codigo = "ERROR_BAIT_TEMPORAL";
             throw err;
         }
+
+        // Diagnóstico antes de cerrar el intento. Esto permite distinguir si BAIT
+        // respondió con otra pantalla, quedó en blanco o cambió la estructura.
+        const diagHome = await (async () => {
+            const url = pag.url();
+            const titulo = await pag.title().catch(() => '');
+            const texto = await pag.locator('body').innerText({ timeout: 800 }).catch(() => '');
+            const muestra = texto.replace(/\s+/g, ' ').trim().slice(0, 500);
+            const cardsDom = await pag.locator('app-card-recharge').count().catch(() => 0);
+            return { url, titulo, muestra, cardsDom };
+        })().catch(() => ({ url: pag.url(), titulo: '', muestra: '', cardsDom: 0 }));
+
+        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — URL: ${diagHome.url}`);
+        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — Título: ${diagHome.titulo || 'SIN_TITULO'} | app-card-recharge DOM: ${diagHome.cardsDom}`);
+        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — Texto visible: ${diagHome.muestra || 'SIN_TEXTO_VISIBLE'}`);
+
         const err = new Error("BAIT_HOME_NO_CARGO");
         err.codigo = "BAIT_HOME_NO_CARGO";
+        err.diagnosticoHome = diagHome;
         throw err;
     }
 
@@ -7298,6 +7345,5 @@ bot.action(
 // ==============================================================================
 
 iniciarServidorYBot();
-
 
 
