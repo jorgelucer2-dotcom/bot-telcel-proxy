@@ -544,10 +544,21 @@ async function tomarCapturaEnfocada(pag) {
 // ==============================================================================
 function extraerFragmentoClave(texto) {
     if (!texto) return "Sin texto de alerta capturado";
+
     const lineas = texto.split('\n')
-        .map(l => l.trim())
-        .filter(l => l.length > 5 && !/^(telcel|bait|recargas|paquetes|aviso de privacidad|términos|todos los derechos|ingresa tu|número amigo|mi bait|duración|obtén internet|una vez consumidos|datos de línea|para registrar|ingresa los datos)/i.test(l));
-    return lineas.slice(0, 3).join(' | ').slice(0, 180) || texto.slice(0, 140);
+        .map(l => l.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        // Ignorar encabezados, navegación y textos promocionales que no representan el resultado del pago.
+        .filter(l => l.length > 5 && !/^(telcel|bait|recargas|paquetes|aviso de privacidad|términos|todos los derechos|ingresa tu|número amigo|mi bait|duración|obtén internet|una vez consumidos|datos de línea|para registrar|ingresa los datos|contacto:|forma de pago:)/i.test(l))
+        .filter(l => !/todo es muy fácil comprar,? pagar y consultar|factura y|más datos/i.test(l));
+
+    // Priorizar siempre el texto que realmente describe el estado del cobro.
+    const prioritarias = lineas.filter(l =>
+        /(estamos procesando tu pago|procesando tu pago|pago en proceso|recarga en proceso|pago exitoso|recarga exitosa|transacci[oó]n exitosa|pago aprobado|folio|comprobante|pago rechazado|transacci[oó]n rechazada|tarjeta rechazada|declinada|fondos insuficientes|saldo insuficiente|error de conexi[oó]n|no se pudo completar|no pudimos procesar|int[ée]ntalo m[aá]s tarde)/i.test(l)
+    );
+
+    const elegidas = prioritarias.length ? prioritarias : lineas;
+    return elegidas.slice(0, 3).join(' | ').slice(0, 180) || "Sin texto de resultado capturado";
 }
 
 function clasificarResultadoBait(textoVisibleLimpio, id) {
@@ -1223,41 +1234,60 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 let repeticionesEstadoFinal = 0;
 
                 while (Date.now() - inicioEspera < TIEMPO_MAXIMO_ESPERA_TELCEL_MS) {
-                    textoFinalPagina = await pagina.evaluate(() => {
-                        const selectores = [
-                            'dialog[open]',
-                            'dialog',
-                            '.alert',
-                            '.error',
-                            '.modal-content',
-                            '[class*="alert" i]',
-                            '[class*="error" i]',
-                            '[class*="modal" i]',
-                            '[class*="voucher" i]',
-                            '[class*="receipt" i]',
-                            'main',
-                            'body'
-                        ];
+                    // Leer el resultado desde la página principal, popups y TODOS los frames/iframes.
+                    // Pay Telcel puede mostrar "Estamos procesando tu pago" dentro de un frame distinto
+                    // al documento principal; si sólo leemos `pagina.evaluate()` ese texto se puede perder.
+                    const paginasContexto = pagina.context()?.pages?.() || [pagina];
+                    const fragmentosTotales = [];
 
-                        const esVisible = el => {
-                            if (!el) return false;
-                            const s = window.getComputedStyle(el);
-                            return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
-                        };
+                    for (const pActual of paginasContexto) {
+                        if (!pActual || pActual.isClosed()) continue;
+                        const framesActuales = pActual.frames ? pActual.frames() : [pActual];
 
-                        let fragmentos = [];
-                        for (const sel of selectores) {
-                            document.querySelectorAll(sel).forEach(el => {
-                                if (esVisible(el)) {
-                                    const t = (el.innerText || '').trim();
-                                    if (t.length > 0 && !fragmentos.includes(t)) {
-                                        fragmentos.push(t);
+                        for (const frameActual of framesActuales) {
+                            try {
+                                const textoFrame = await frameActual.evaluate(() => {
+                                    const selectores = [
+                                        'dialog[open]',
+                                        'dialog',
+                                        '.alert',
+                                        '.error',
+                                        '.modal-content',
+                                        '[class*="alert" i]',
+                                        '[class*="error" i]',
+                                        '[class*="modal" i]',
+                                        '[class*="voucher" i]',
+                                        '[class*="receipt" i]',
+                                        '[class*="success" i]',
+                                        '[class*="result" i]',
+                                        '[class*="summary" i]',
+                                        'main',
+                                        'body'
+                                    ];
+
+                                    const esVisible = el => {
+                                        if (!el) return false;
+                                        const s = window.getComputedStyle(el);
+                                        return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+                                    };
+
+                                    const fragmentos = [];
+                                    for (const sel of selectores) {
+                                        document.querySelectorAll(sel).forEach(el => {
+                                            if (!esVisible(el)) return;
+                                            const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+                                            if (t.length > 0 && !fragmentos.includes(t)) fragmentos.push(t);
+                                        });
                                     }
-                                }
-                            });
+                                    return fragmentos.join(' \n ');
+                                }).catch(() => '');
+
+                                if (textoFrame && textoFrame.trim()) fragmentosTotales.push(textoFrame.trim());
+                            } catch (_) {}
                         }
-                        return fragmentos.join(' \n ');
-                    }).catch(() => '');
+                    }
+
+                    textoFinalPagina = [...new Set(fragmentosTotales)].join(' \n ');
 
                     clasificacionFinal = clasificarResultadoTelcel(textoFinalPagina, id);
 
@@ -1313,7 +1343,12 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 if (miId === ejecucionesUsuario.get(id)) {
                     const fragmentoLeido = extraerFragmentoClave(textoFinalPagina);
-                    const capturaVoucher = await tomarCapturaEnfocada(pagina);
+                    // Capturar sólo estados verdaderamente finales. Si Telcel sigue en "procesando"
+                    // o no hay confirmación, NO enviar una imagen intermedia como si fuera resultado.
+                    const estadoConCaptura = ['EXITO', 'RECHAZO_BANCARIO', 'BLOQUEO_TELCEL', 'ERROR_TELCEL'].includes(clasificacionFinal.estado);
+                    const capturaVoucher = estadoConCaptura
+                        ? await tomarCapturaEnfocada(pagina).catch(() => null)
+                        : null;
 
                     await limpiarMensajesTemporales(ctx, id);
 
@@ -1388,9 +1423,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                             `📱 <b>Línea:</b> <code>${numero}</code>\n` +
                             `💲 <b>Monto:</b> $${monto} MXN\n` +
-                            `📄 <b>Estado:</b> "<i>${fragmentoLeido}</i>"\n\n` +
-                            `ℹ️ ▫️ La solicitud fue enviada y se encuentra en validación.\n` +
-                            `👉 <b>Toca /start para realizar otra operación.</b>`;
+                            `📄 <b>Mensaje de Telcel:</b> "<i>${fragmentoLeido}</i>"\n\n` +
+                            `ℹ️ <b>Telcel continúa procesando el pago.</b> Aún no existe confirmación final de éxito o rechazo.\n` +
+                            `🔎 <b>Verifica el estado de la recarga antes de volver a intentar.</b>`;
 
                         if (capturaVoucher) {
                             await ctx.replyWithPhoto({ source: capturaVoucher }, {
