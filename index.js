@@ -37,7 +37,7 @@ const ADMIN_ID_STR = String(ADMIN_ID);
 // ==============================================================================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PUERTO = parseInt(process.env.PORT, 10) || 10001;
-const URL_TELCEL = process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
+const URL_PAY_TELCEL = process.env.URL_PAY_TELCEL || process.env.URL_TELCEL || 'https://pay.telcel.com/package/1';
 const URL_BAIT = process.env.URL_BAIT || 'https://mibait.com/recargas';
 const BRIGHTDATA_BROWSER_WS = process.env.BRIGHTDATA_BROWSER_WS || process.env.PROXY || '';
 const USE_LOCAL_CHROMIUM = process.env.USE_LOCAL_CHROMIUM === 'true';
@@ -219,6 +219,85 @@ const mensajesTemporales = new Map();
 const historialErroresUsuario = new Map();
 
 // ==============================================================================
+// 🔒 AISLAMIENTO MULTIUSUARIO Y DATOS SEGUROS (REUTILIZA ESTRUCTURAS EXISTENTES)
+// ==============================================================================
+function obtenerChatId(ctx) {
+    const id = ctx?.chat?.id;
+    return (id === undefined || id === null) ? null : id;
+}
+
+function estaUsuarioOcupado(id) {
+    if (id === null || id === undefined) return false;
+    const s = sesiones.get(id);
+    return Boolean(s && s.enCurso === true);
+}
+
+function marcarUsuarioEnCurso(id, activo) {
+    if (id === null || id === undefined) return;
+    const s = sesiones.get(id);
+    if (!s) {
+        if (activo) sesiones.set(id, { enCurso: true });
+        return;
+    }
+    s.enCurso = Boolean(activo);
+    sesiones.set(id, s);
+}
+
+function invalidarEjecucionUsuario(id) {
+    if (id === null || id === undefined) return;
+    ejecucionesUsuario.set(id, (ejecucionesUsuario.get(id) || 0) + 1);
+}
+
+function eliminarDatosSensiblesDeSesion(id, { conservarPaso = true } = {}) {
+    if (id === null || id === undefined) return;
+    const s = sesiones.get(id);
+    if (!s) return;
+
+    delete s.tarjeta;
+    delete s.cc;
+    delete s.mes;
+    delete s.anio;
+    delete s.anioCompleto;
+    delete s.cvv;
+    delete s.nombre;
+    delete s.direccion_valida;
+    delete s.cp_auto;
+    delete s.tel_auto;
+    delete s.correo_auto;
+    delete s.tokenPago;
+
+    s.enCurso = false;
+    if (!conservarPaso) delete s.paso;
+    sesiones.set(id, s);
+}
+
+function guardarResumenSeguroRecarga(id, { operador, modo, monto, ult4 }) {
+    if (id === null || id === undefined) return;
+    sesiones.set(id, {
+        tipo: operador,
+        modo: modo || (String(operador || '').toLowerCase()),
+        monto,
+        ult4: String(ult4 || '****').slice(-4),
+        paso: 'finalizado',
+        enCurso: false
+    });
+}
+
+function tecladoPostRecarga() {
+    return Markup.inlineKeyboard([
+        [Markup.button.callback('🔄 RECARGAR OTRO NÚMERO', 'btn_recargar_otro_numero')],
+        [Markup.button.callback('🆕 RECARGA NUEVA', 'btn_recarga_nueva')]
+    ]);
+}
+
+async function responderUsuarioOcupado(ctx) {
+    return ctx.reply(
+        '⏳ Ya tienes una operación en curso. Espera a que termine o usa /cancelar.',
+        { parse_mode: 'HTML' }
+    ).catch(() => null);
+}
+
+// ==============================================================================
 // 🧹 GESTIÓN DE MENSAJES TEMPORALES (CHAT SIEMPRE LIMPIO)
 // ==============================================================================
 function registrarMensajeTemporal(id, messageId) {
@@ -231,7 +310,7 @@ function registrarMensajeTemporal(id, messageId) {
 }
 
 async function limpiarMensajesTemporales(ctx, id) {
-    const userId = id || ctx.chat?.id || ctx.from?.id;
+    const userId = (id !== undefined && id !== null) ? id : obtenerChatId(ctx);
     if (!userId) return;
     const lista = mensajesTemporales.get(userId) || [];
     for (const msgId of lista) {
@@ -243,7 +322,7 @@ async function limpiarMensajesTemporales(ctx, id) {
 }
 
 async function enviarLimpio(ctx, texto, opciones = {}) {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
     const opcionesFinales = { parse_mode: 'HTML', ...opciones };
 
     if (ctx.message?.message_id) {
@@ -811,7 +890,7 @@ async function lanzarNavegador(id) {
     return { navegador, contexto, pagina };
 }
 
-async function aceptarUbicacionSiAparece(pagina) {
+async function aceptarUbicacionSiAparece(pagina, timeoutMax = 1400) {
     if (!pagina || (typeof pagina.isClosed === 'function' && pagina.isClosed())) return false;
     const selectoresUbicacion = [
         'button:has-text("Permitir mientras visito el sitio")',
@@ -828,16 +907,22 @@ async function aceptarUbicacionSiAparece(pagina) {
         '[aria-label*="Ubicación" i]'
     ];
 
-    for (const s of selectoresUbicacion) {
-        try {
-            const btn = pagina.locator(s).first();
-            if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
-                await btn.click({ force: true }).catch(() => {});
-                return true;
-            }
-        } catch(e) {}
+    // Todos los selectores se observan al mismo tiempo. Antes podían sumar varios segundos
+    // porque cada selector ausente esperaba por separado.
+    const esperas = selectoresUbicacion.map(selector => (async () => {
+        const btn = pagina.locator(selector).first();
+        await btn.waitFor({ state: 'visible', timeout: timeoutMax });
+        return btn;
+    })());
+
+    try {
+        const btn = await Promise.any(esperas);
+        // Playwright ya auto-espera visibilidad, estabilidad, recepción de eventos y enabled.
+        await btn.click({ timeout: 1800 }).catch(() => btn.click({ force: true, timeout: 800 }));
+        return true;
+    } catch (_) {
+        return false;
     }
-    return false;
 }
 
 // ==============================================================================
@@ -847,22 +932,20 @@ async function abrirMasPaquetes(pagina, monto, id = '') {
     const tInicio = Date.now();
     logTelcel(id, `📦 Buscando paquetes...`);
 
-    let t = Date.now();
-    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    logTelcel(id, `⏱️ Espera inicial networkidle: ${Date.now() - t} ms`);
-
-    const botonVerMas = pagina.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")');
-    t = Date.now();
-    const esVisible = await botonVerMas.isVisible({ timeout: 4000 }).catch(() => false);
-    logTelcel(id, `⏱️ Comprobación visibilidad 'Ver más paquetes': ${Date.now() - t} ms (visible: ${esVisible})`);
+    const botonVerMas = pagina.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")').first();
+    const tBoton = Date.now();
+    const esVisible = await botonVerMas.waitFor({ state: 'visible', timeout: 3500 })
+        .then(() => true)
+        .catch(() => false);
+    logTelcel(id, `⏱️ Detección 'Ver más paquetes': ${Date.now() - tBoton} ms (visible: ${esVisible})`);
 
     if (esVisible) {
         logTelcel(id, `📦 Abriendo Ver más paquetes`);
-        t = Date.now();
+        const t = Date.now();
         await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
-        await botonVerMas.click({ force: true }).catch(() => {});
-        await pagina.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
-        logTelcel(id, `✅ 'Ver más paquetes' clickeado y networkidle: ${Date.now() - t} ms`);
+        await botonVerMas.click({ timeout: 5000 })
+            .catch(() => botonVerMas.click({ force: true, timeout: 1500 }));
+        logTelcel(id, `✅ 'Ver más paquetes' clickeado en ${Date.now() - t} ms`);
     }
 
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
@@ -870,49 +953,38 @@ async function abrirMasPaquetes(pagina, monto, id = '') {
         .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
         .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
 
-    t = Date.now();
-    logTelcel(id, `🔍 Esperando tarjeta paquete $${monto} (attached)...`);
-    await tarjetaEsperada.waitFor({ state: 'attached', timeout: 25000 }).catch(() => {});
-    logTelcel(id, `✅ Tarjeta paquete $${monto} attached en ${Date.now() - t} ms (Total abrirMasPaquetes: ${Date.now() - tInicio} ms)`);
+    const tTarjeta = Date.now();
+    logTelcel(id, `🔍 Esperando tarjeta paquete $${monto}...`);
+    await tarjetaEsperada.waitFor({ state: 'visible', timeout: 25000 });
+    logTelcel(id, `✅ Tarjeta paquete $${monto} visible en ${Date.now() - tTarjeta} ms (Total: ${Date.now() - tInicio} ms)`);
 }
 
 async function seleccionarPaquete(pagina, monto, id = '') {
     const tInicio = Date.now();
     logTelcel(id, `🔍 Buscando paquete $${monto}`);
 
-    let t = Date.now();
-    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    logTelcel(id, `⏱️ Espera networkidle antes de seleccionar: ${Date.now() - t} ms`);
-
     const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
     const tarjeta = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
         .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
         .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
 
-    t = Date.now();
-    await tarjeta.waitFor({ state: 'attached', timeout: 20000 });
-    logTelcel(id, `⏱️ Tarjeta attached: ${Date.now() - t} ms`);
-
-    t = Date.now();
+    const tTarjeta = Date.now();
     await tarjeta.waitFor({ state: 'visible', timeout: 20000 });
-    logTelcel(id, `✅ Paquete $${monto} encontrado (visible en ${Date.now() - t} ms)`);
+    logTelcel(id, `✅ Paquete $${monto} visible en ${Date.now() - tTarjeta} ms`);
 
-    const botonLoQuiero = tarjeta.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero"), button:has-text("Lo quiero")');
+    const botonLoQuiero = tarjeta.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero"), button:has-text("Lo quiero")').first();
     await botonLoQuiero.scrollIntoViewIfNeeded().catch(() => {});
-
-    t = Date.now();
     await botonLoQuiero.waitFor({ state: 'visible', timeout: 15000 });
-    logTelcel(id, `⏱️ Botón 'Lo quiero' visible: ${Date.now() - t} ms`);
 
     if (!(await botonLoQuiero.isEnabled().catch(() => false))) {
         throw new Error(`BOTON_LO_QUIERO_$${monto}_NO_HABILITADO`);
     }
 
     logTelcel(id, `🖱️ Seleccionando paquete $${monto}`);
-    t = Date.now();
-    await botonLoQuiero.click({ force: true });
-    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-    logTelcel(id, `✅ Paquete seleccionado en ${Date.now() - t} ms (Total seleccionarPaquete: ${Date.now() - tInicio} ms)`);
+    const tClick = Date.now();
+    await botonLoQuiero.click({ timeout: 7000 })
+        .catch(() => botonLoQuiero.click({ force: true, timeout: 1500 }));
+    logTelcel(id, `✅ Paquete seleccionado en ${Date.now() - tClick} ms (Total: ${Date.now() - tInicio} ms)`);
 }
 
 async function detectarNumeroInvalido(page) {
@@ -1005,6 +1077,8 @@ async function ejecutarConReintento(fn, intentosMax = 3, id) {
 // 💳 5. FLUJO AUTOMÁTICO DE RECARGA TELCEL ($200, $300, $500)
 // ==============================================================================
 async function flujoTelcelIndependiente(ctx, id, datos) {
+    if (id === null || id === undefined) return;
+    marcarUsuarioEnCurso(id, true);
     const { numero, cc, mes, anio, anioCompleto, cvv, nombre, monto: montoIn } = datos;
     const monto = montoIn || 200;
 
@@ -1050,12 +1124,14 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 });
 
                 ultimaEtapa = "Navegación a Telcel Pay";
-                logTelcel(id, `🌐 Navegando a Telcel Pay (${URL_TELCEL})`);
+                logTelcel(id, `🌐 Navegando a Telcel Pay (${URL_PAY_TELCEL})`);
                 t = Date.now();
-                await pagina.goto(URL_TELCEL, { waitUntil: 'commit', timeout: 45000 });
-                await pagina.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
-                await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-                logTelcel(id, `✅ Página Telcel cargada en ${Date.now() - t} ms`);
+                const respuestaTelcel = await pagina.goto(URL_PAY_TELCEL, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                const statusTelcel = respuestaTelcel ? respuestaTelcel.status() : 0;
+                if (statusTelcel >= 400) {
+                    throw new Error(`TELCEL_HTTP_${statusTelcel}`);
+                }
+                logTelcel(id, `✅ Página Telcel lista en ${Date.now() - t} ms (HTTP ${statusTelcel || 'SIN_STATUS'})`);
 
                 t = Date.now();
                 const ubicacionAceptada = await aceptarUbicacionSiAparece(pagina);
@@ -1098,25 +1174,32 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 const btnContinuarTel = pagina.locator('button.fontBoldAMX:has-text("Continuar"), button.bg-\\[\\#7b1fa2\\]:has-text("Continuar"), button:has-text("Continuar"), button[type="submit"]').first();
                 await btnContinuarTel.waitFor({ state: 'visible', timeout: 25000 });
                 await btnContinuarTel.scrollIntoViewIfNeeded().catch(() => {});
-                await btnContinuarTel.click({ force: true });
-                await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+                await btnContinuarTel.click({ timeout: 8000 })
+                    .catch(() => btnContinuarTel.click({ force: true, timeout: 1500 }));
                 logTelcel(id, `✅ Clic en continuar realizado en ${Date.now() - t} ms`);
 
-                await pagina.waitForTimeout(800);
-                const verifNumTel = await detectarNumeroInvalido(pagina);
-                if (verifNumTel && verifNumTel.esInvalido) {
-                    const err = new Error('NUMERO_INVALIDO');
-                    err.esNumeroInvalido = true;
-                    err.mensajeInvalido = verifNumTel.mensaje;
-                    throw err;
-                }
-
                 ultimaEtapa = "Llenado de datos de tarjeta";
-                logTelcel(id, `⏳ Esperando formulario siguiente (tarjeta)`);
+                logTelcel(id, `⏳ Esperando formulario siguiente (tarjeta) o aviso de número inválido`);
                 t = Date.now();
                 const inputCC = pagina.locator('input#creditCardNumber, input[placeholder*="16 dígitos" i], input[name="cardNumber"]').first();
-                await inputCC.waitFor({ state: 'attached', timeout: 30000 });
-                await inputCC.waitFor({ state: 'visible', timeout: 30000 });
+                const inicioPasoPago = Date.now();
+                let formularioPagoVisible = false;
+
+                while (Date.now() - inicioPasoPago < 30000) {
+                    if (await inputCC.isVisible().catch(() => false)) {
+                        formularioPagoVisible = true;
+                        break;
+                    }
+                    const verifNumTel = await detectarNumeroInvalido(pagina);
+                    if (verifNumTel && verifNumTel.esInvalido) {
+                        const err = new Error('NUMERO_INVALIDO');
+                        err.esNumeroInvalido = true;
+                        err.mensajeInvalido = verifNumTel.mensaje;
+                        throw err;
+                    }
+                    await pagina.waitForTimeout(120);
+                }
+                if (!formularioPagoVisible) throw new Error('FORMULARIO_PAGO_NO_VISIBLE');
                 logTelcel(id, `✅ Formulario siguiente detectado en ${Date.now() - t} ms`);
 
                 if (!(await inputCC.isEditable().catch(() => false)) || !(await inputCC.isEnabled().catch(() => false))) {
@@ -1355,6 +1438,13 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     let mensajeTelegram = '';
 
                     if (clasificacionFinal.estado === 'EXITO') {
+                        guardarResumenSeguroRecarga(id, {
+                            operador: 'Telcel',
+                            modo: 'telcel',
+                            monto,
+                            ult4: (sesiones.get(id)?.ult4 || String(cc || '').slice(-4))
+                        });
+
                         mensajeTelegram = 
                             `🦁 <b>BOT LEÓN — COMPROBANTE DE RECARGA EXITOSA</b> ✅\n` +
                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1368,10 +1458,11 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                         if (capturaVoucher) {
                             await ctx.replyWithPhoto({ source: capturaVoucher }, {
                                 caption: mensajeTelegram.slice(0, 1024),
-                                parse_mode: 'HTML'
+                                parse_mode: 'HTML',
+                                ...tecladoPostRecarga()
                             });
                         } else {
-                            await ctx.replyWithHTML(mensajeTelegram);
+                            await ctx.reply(mensajeTelegram, { parse_mode: 'HTML', ...tecladoPostRecarga() });
                         }
 
                     } else if (clasificacionFinal.estado === 'RECHAZO_BANCARIO') {
@@ -1399,6 +1490,10 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                                 await ctx.replyWithHTML(mensajeTelegram);
                             }
                         } else {
+                            eliminarDatosSensiblesDeSesion(id);
+                            const sRetry = sesiones.get(id) || {};
+                            sRetry.paso = 'tarjeta';
+                            sesiones.set(id, sRetry);
                             mensajeTelegram = 
                                 `❌ <b>RECARGA NO COMPLETADA: MONTO / FONDOS INSUFICIENTES</b>\n` +
                                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -1485,7 +1580,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
             const s = sesiones.get(id) || datos;
             s.paso = 'numero';
             s.numero = null;
+            s.enCurso = false;
             sesiones.set(id, s);
+            eliminarDatosSensiblesDeSesion(id);
 
             await ctx.replyWithHTML(
                 `❌ <b>El número ingresado no es válido o no fue reconocido.</b>\n\n` +
@@ -1513,6 +1610,8 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
     } finally {
         logTelcel(id, `🧹 Cerrando sesión Telcel en finally global`);
         await cerrarSesionNavegador(id);
+        marcarUsuarioEnCurso(id, false);
+        eliminarDatosSensiblesDeSesion(id);
     }
 }
 
@@ -1776,18 +1875,39 @@ async function detectarErrorBaitVisible(pag, id) {
     return false;
 }
 
+async function esperarVisibleBaitConError(pag, id, locators, timeout = 12000) {
+    const lista = Array.isArray(locators) ? locators : [locators];
+    const inicio = Date.now();
+
+    const esperaElemento = Promise.any(
+        lista.map(loc => loc.waitFor({ state: 'visible', timeout }).then(() => loc))
+    );
+
+    const vigilarError = (async () => {
+        while (Date.now() - inicio < timeout) {
+            if (await detectarErrorBaitVisible(pag, id)) {
+                const err = new Error('ERROR_BAIT_TEMPORAL');
+                err.codigo = 'ERROR_BAIT_TEMPORAL';
+                throw err;
+            }
+            await pag.waitForTimeout(120);
+        }
+        return null;
+    })();
+
+    try {
+        const resultado = await Promise.race([esperaElemento, vigilarError]);
+        return resultado || null;
+    } catch (err) {
+        if (err && err.codigo === 'ERROR_BAIT_TEMPORAL') throw err;
+        return null;
+    }
+}
+
 // 5.1 APERTURA DE PAQUETE, MODAL, LLENADO Y AVANCE
 async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
-    // 1. Navegación inicial. No ocultamos el error: lo registramos y dejamos que
-    // la comprobación visual decida si la SPA de BAIT terminó de renderizar.
-    let respuestaHome = null;
-    try {
-        respuestaHome = await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        console.log(`🌐 [Bait Usuario ${id}] HOME BAIT HTTP ${respuestaHome ? respuestaHome.status() : 'SIN_STATUS'} — ${pag.url()}`);
-    } catch (eGoto) {
-        console.log(`⚠️ [Bait Usuario ${id}] Navegación inicial BAIT incompleta: ${(eGoto.message || eGoto).toString().slice(0, 180)}`);
-    }
-
+    // 1. Navegación inicial
+    await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await aceptarCookiesBait(pag, id);
 
     // Comprobación temprana después de goto
@@ -1797,105 +1917,25 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
         throw err;
     }
 
-    // 2. Esperar la HOME real de BAIT. Antes dependía exclusivamente de
-    // <app-card-recharge>; ahora también aceptamos como señal válida que el
-    // paquete solicitado ya sea visible, por si BAIT cambia el wrapper Angular.
-    const tInicioHome = Date.now();
-    const TIMEOUT_HOME_MS = 20000;
-    let homeCargo = false;
-    let senalHome = 'NINGUNA';
-    const selectoresPaqueteHome = getSelectoresPaqueteBait(monto);
+    // 2. Esperar HOME BAIT por condición real: en cuanto el primer paquete sea visible, continuar.
+    const primerCard = pag.locator('app-card-recharge').first();
+    const homeVisible = await esperarVisibleBaitConError(pag, id, primerCard, 12000);
 
-    while (Date.now() - tInicioHome < TIMEOUT_HOME_MS) {
+    if (!homeVisible) {
         if (await detectarErrorBaitVisible(pag, id)) {
             const err = new Error("ERROR_BAIT_TEMPORAL");
             err.codigo = "ERROR_BAIT_TEMPORAL";
             throw err;
         }
-
-        const countCards = await pag.locator('app-card-recharge').count().catch(() => 0);
-        if (countCards > 0) {
-            const primerCard = pag.locator('app-card-recharge').first();
-            if (await primerCard.isVisible({ timeout: 120 }).catch(() => false)) {
-                homeCargo = true;
-                senalHome = 'APP_CARD_RECHARGE';
-                break;
-            }
-        }
-
-        // Fallback conservador: si el wrapper cambió pero la tarjeta/imagen del
-        // monto solicitado sí está visible, la HOME está cargada y podemos seguir.
-        for (const sel of selectoresPaqueteHome) {
-            const visible = await pag.locator(sel).first().isVisible({ timeout: 80 }).catch(() => false);
-            if (visible) {
-                homeCargo = true;
-                senalHome = `PAQUETE_VISIBLE:${sel}`;
-                break;
-            }
-        }
-        if (homeCargo) break;
-
-        await aceptarCookiesBait(pag, id);
-        await pag.waitForTimeout(250);
-    }
-
-    if (homeCargo) {
-        console.log(`✅ [Bait Usuario ${id}] HOME BAIT detectada en ${Date.now() - tInicioHome} ms (${senalHome})`);
-    }
-
-    if (!homeCargo) {
-        if (await detectarErrorBaitVisible(pag, id)) {
-            const err = new Error("ERROR_BAIT_TEMPORAL");
-            err.codigo = "ERROR_BAIT_TEMPORAL";
-            throw err;
-        }
-
-        // Diagnóstico antes de cerrar el intento. Esto permite distinguir si BAIT
-        // respondió con otra pantalla, quedó en blanco o cambió la estructura.
-        const diagHome = await (async () => {
-            const url = pag.url();
-            const titulo = await pag.title().catch(() => '');
-            const texto = await pag.locator('body').innerText({ timeout: 800 }).catch(() => '');
-            const muestra = texto.replace(/\s+/g, ' ').trim().slice(0, 500);
-            const cardsDom = await pag.locator('app-card-recharge').count().catch(() => 0);
-            return { url, titulo, muestra, cardsDom };
-        })().catch(() => ({ url: pag.url(), titulo: '', muestra: '', cardsDom: 0 }));
-
-        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — URL: ${diagHome.url}`);
-        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — Título: ${diagHome.titulo || 'SIN_TITULO'} | app-card-recharge DOM: ${diagHome.cardsDom}`);
-        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — Texto visible: ${diagHome.muestra || 'SIN_TEXTO_VISIBLE'}`);
-
         const err = new Error("BAIT_HOME_NO_CARGO");
         err.codigo = "BAIT_HOME_NO_CARGO";
-        err.diagnosticoHome = diagHome;
         throw err;
     }
 
-    // 3. Localizar paquete de recarga ($300)
+    // 3. Localizar el paquete solicitado sin polling fijo por selector.
     const selectoresCard = getSelectoresPaqueteBait(monto);
-    let cardBtn = null;
-    const tInicioPaquete = Date.now();
-    const TIMEOUT_PAQUETE_MS = 10000;
-
-    while (Date.now() - tInicioPaquete < TIMEOUT_PAQUETE_MS) {
-        if (await detectarErrorBaitVisible(pag, id)) {
-            const err = new Error("ERROR_BAIT_TEMPORAL");
-            err.codigo = "ERROR_BAIT_TEMPORAL";
-            throw err;
-        }
-
-        for (const sel of selectoresCard) {
-            try {
-                const el = pag.locator(sel).first();
-                if (await el.isVisible({ timeout: 80 }).catch(() => false)) {
-                    cardBtn = el;
-                    break;
-                }
-            } catch(e) {}
-        }
-        if (cardBtn) break;
-        await pag.waitForTimeout(200);
-    }
+    const candidatosCard = selectoresCard.map(sel => pag.locator(sel).first());
+    const cardBtn = await esperarVisibleBaitConError(pag, id, candidatosCard, 10000);
 
     if (!cardBtn) {
         if (await detectarErrorBaitVisible(pag, id)) {
@@ -1909,28 +1949,13 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
     }
 
     await cardBtn.scrollIntoViewIfNeeded().catch(() => {});
-    await cardBtn.click().catch(() => cardBtn.click({ force: true }));
+    await cardBtn.click({ timeout: 6000 }).catch(() => cardBtn.click({ force: true, timeout: 1500 }));
 
-    // 4. Detectar apertura del modal mediante dialog[open]
+    // 4. Detectar apertura real del modal; no dormir una cantidad fija.
     const modal = pag.locator('dialog[open]').first();
-    const tInicioModal = Date.now();
-    const TIMEOUT_MODAL_MS = 10000;
-    let modalAbierto = false;
+    const modalVisible = await esperarVisibleBaitConError(pag, id, modal, 10000);
 
-    while (Date.now() - tInicioModal < TIMEOUT_MODAL_MS) {
-        if (await detectarErrorBaitVisible(pag, id)) {
-            const err = new Error("ERROR_BAIT_TEMPORAL");
-            err.codigo = "ERROR_BAIT_TEMPORAL";
-            throw err;
-        }
-        if (await modal.isVisible({ timeout: 80 }).catch(() => false)) {
-            modalAbierto = true;
-            break;
-        }
-        await pag.waitForTimeout(150);
-    }
-
-    if (!modalAbierto) {
+    if (!modalVisible) {
         if (await detectarErrorBaitVisible(pag, id)) {
             const err = new Error("ERROR_BAIT_TEMPORAL");
             err.codigo = "ERROR_BAIT_TEMPORAL";
@@ -3667,6 +3692,8 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
 
 // 9. FLUJO PRINCIPAL BAIT (UN SOLO CHROMIUM — CONTROL DE CICLO DE VIDA)
 async function flujoBait(ctx, id, datos) {
+    if (id === null || id === undefined) return;
+    marcarUsuarioEnCurso(id, true);
     const { numero, monto: montoIn } = datos;
     const monto = montoIn || 300;
     const inicioBait = Date.now();
@@ -3791,6 +3818,13 @@ async function flujoBait(ctx, id, datos) {
 
 } else if (clasif.estado === 'EXITO' && info.pagoConfirmado === true) {
 
+    guardarResumenSeguroRecarga(id, {
+        operador: 'Bait',
+        modo: 'bait',
+        monto,
+        ult4: (sesiones.get(id)?.ult4 || String(datos?.tarjeta || datos?.cc || '').slice(-4))
+    });
+
     if (!captura && pag && !pag.isClosed()) {
         try {
             captura = await tomarCapturaEnfocada(pag);
@@ -3826,11 +3860,12 @@ async function flujoBait(ctx, id, datos) {
             { source: captura },
             {
                 caption: captionFinal.slice(0, 1024),
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                ...tecladoPostRecarga()
             }
         );
     } else {
-        await ctx.replyWithHTML(captionFinal);
+        await ctx.reply(captionFinal, { parse_mode: 'HTML', ...tecladoPostRecarga() });
     }
 
             } else if (clasif.estado === 'RECHAZO_BANCARIO') {
@@ -3921,33 +3956,34 @@ await ctx.replyWithHTML(msgError);
 
 } finally {
     await cerrarNavegadorBait(id);
+    marcarUsuarioEnCurso(id, false);
+    eliminarDatosSensiblesDeSesion(id);
 }
 }
+async function cerrarTodosNavegadoresBait() {
+    const ids = new Set([
+        ...navegadoresBait.keys(),
+        ...popupsActivosBait.keys()
+    ]);
+    for (const userId of ids) {
+        await cerrarNavegadorBait(userId).catch(() => {});
+    }
+}
+
 // ==============================================================================
 // 🟣 TELCEL.COM / TIENDA TELCEL
 // https://www.telcel.com/tienda/recarga-saldo
 // ==============================================================================
 const navegadoresTienda = new Map();
-const URL_TELCEL_TIENDA = 'https://www.telcel.com/tienda/recarga-saldo';
+const URL_TELCEL_TIENDA = process.env.URL_TELCEL_TIENDA || 'https://www.telcel.com/tienda/recarga-saldo';
 
 function logTelcelTienda(id, msg) {
     console.log(`[Telcel.com Usuario ${id}] ${msg}`);
 }
 
 async function cerrarNavegadorTienda(id) {
-    if (!id) {
-        for (const [userId, nav] of navegadoresTienda) {
-            try {
-                for (const ctx of nav.contexts()) {
-                    for (const p of ctx.pages()) {
-                        await p.close().catch(() => {});
-                    }
-                    await ctx.close().catch(() => {});
-                }
-                await nav.close().catch(() => {});
-            } catch (_) {}
-        }
-        navegadoresTienda.clear();
+    if (id === null || id === undefined) {
+        console.warn('[Telcel.com] Cierre ignorado: falta chat.id; no se cerrarán recursos de otros usuarios.');
         return;
     }
 
@@ -3965,6 +4001,13 @@ async function cerrarNavegadorTienda(id) {
         }
         await nav.close().catch(() => {});
     } catch (_) {}
+}
+
+async function cerrarTodosNavegadoresTienda() {
+    const ids = Array.from(navegadoresTienda.keys());
+    for (const userId of ids) {
+        await cerrarNavegadorTienda(userId).catch(() => {});
+    }
 }
 
 async function crearNavegadorTienda(id) {
@@ -4167,7 +4210,6 @@ async function llenarNumeroTienda(page, numero, id) {
 
     if (await tituloRecarga.isVisible({ timeout: 1500 }).catch(() => false)) {
         await tituloRecarga.scrollIntoViewIfNeeded().catch(() => {});
-        await page.waitForTimeout(500);
     }
 
     const frames = page.frames();
@@ -4245,7 +4287,6 @@ async function llenarNumeroTienda(page, numero, id) {
     await campoNumero.dispatchEvent('change', { bubbles: true }).catch(() => {});
     await campoNumero.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-    await page.waitForTimeout(400);
 
     // Llenar campo 2 (Confirmar el número Telcel)
     await campoConfirmacion.scrollIntoViewIfNeeded();
@@ -4256,7 +4297,6 @@ async function llenarNumeroTienda(page, numero, id) {
     await campoConfirmacion.dispatchEvent('change', { bubbles: true }).catch(() => {});
     await campoConfirmacion.dispatchEvent('blur', { bubbles: true }).catch(() => {});
 
-    await page.waitForTimeout(300);
 
     // Comprobar con inputValue()
     const valor1 = await campoNumero.inputValue().catch(() => '');
@@ -4321,16 +4361,19 @@ async function seleccionarTipoCompraTienda(page, id) {
     const container = control.locator('.form-field-container, .form-field').first();
 
     let abierto = false;
+    const opcionesSelect = control.locator('.select-options').first();
     if (await arrow.isVisible({ timeout: 400 }).catch(() => false)) {
         await arrow.click().catch(() => {});
-        await page.waitForTimeout(400);
-        abierto = await control.evaluate(el => el.classList.contains('select-open')).catch(() => false) ||
-                  await control.locator('.select-options').isVisible({ timeout: 300 }).catch(() => false);
+        abierto = await opcionesSelect.waitFor({ state: 'visible', timeout: 1400 })
+            .then(() => true)
+            .catch(() => control.evaluate(el => el.classList.contains('select-open')).catch(() => false));
     }
 
     if (!abierto) {
         await container.click().catch(() => {});
-        await page.waitForTimeout(400);
+        abierto = await opcionesSelect.waitFor({ state: 'visible', timeout: 1800 })
+            .then(() => true)
+            .catch(() => control.evaluate(el => el.classList.contains('select-open')).catch(() => false));
     }
 
     logTelcelTienda(id, '✅ [Telcel.com] Dropdown abierto');
@@ -4359,7 +4402,6 @@ async function seleccionarTipoCompraTienda(page, id) {
     }
 
     logTelcelTienda(id, '✅ [Telcel.com] Paquetes Amigo Sin Límite seleccionado');
-    await page.waitForTimeout(400);
 
     // 5. Verificar que el .select muestre Paquetes Amigo Sin Límite
     const inicioVerif = Date.now();
@@ -5284,6 +5326,8 @@ async function tomarCapturaTienda(page, id, etiqueta = 'precheckout') {
 }
 
 async function flujoTelcelTienda(ctx, id, datos) {
+    if (id === null || id === undefined) return;
+    marcarUsuarioEnCurso(id, true);
     const { numero, monto, tarjeta } = datos;
     let sesion = null;
     let page = null;
@@ -5351,7 +5395,6 @@ async function flujoTelcelTienda(ctx, id, datos) {
 
         // PASO 1: Ingresar número en ambas casillas
         await llenarNumeroTienda(page, numero, id);
-        await page.waitForTimeout(600);
 
         const verifNumTienda1 = await detectarNumeroInvalido(page);
         if (verifNumTienda1 && verifNumTienda1.esInvalido) {
@@ -5397,6 +5440,13 @@ async function flujoTelcelTienda(ctx, id, datos) {
         if (resultado.tipo === 'EXITO') {
             const info = await extraerDatosConfirmacionTienda(page, datos);
 
+            guardarResumenSeguroRecarga(id, {
+                operador: 'Telcel.com',
+                modo: 'telcel_tienda',
+                monto,
+                ult4: (sesiones.get(id)?.ult4 || String(datos?.tarjeta || datos?.cc || '').slice(-4))
+            });
+
             const textoExito = 
                 `🎉 <b>¡SU RECARGA FUE EXITOSA!</b> 🎉\n` +
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -5412,10 +5462,10 @@ async function flujoTelcelTienda(ctx, id, datos) {
             if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
                 await ctx.replyWithPhoto(
                     { source: capturaResultadoTienda },
-                    { caption: textoExito.slice(0, 1024), parse_mode: 'HTML' }
+                    { caption: textoExito.slice(0, 1024), parse_mode: 'HTML', ...tecladoPostRecarga() }
                 ).catch(() => {});
             } else {
-                await ctx.replyWithHTML(textoExito).catch(() => {});
+                await ctx.reply(textoExito, { parse_mode: 'HTML', ...tecladoPostRecarga() }).catch(() => {});
             }
         } else if (resultado.tipo === 'RECHAZO_BANCARIO') {
             const textoRechazo =
@@ -5497,7 +5547,9 @@ async function flujoTelcelTienda(ctx, id, datos) {
             const s = sesiones.get(id) || datos;
             s.paso = 'numero';
             s.numero = null;
+            s.enCurso = false;
             sesiones.set(id, s);
+            eliminarDatosSensiblesDeSesion(id);
 
             await ctx.replyWithHTML(
                 `❌ <b>El número ingresado no es válido o no fue reconocido.</b>\n\n` +
@@ -5550,9 +5602,10 @@ async function flujoTelcelTienda(ctx, id, datos) {
     } finally {
         await cerrarNavegadorTienda(id);
         logTelcelTienda(id, `🧹 [Telcel.com] Navegador cerrado`);
+        marcarUsuarioEnCurso(id, false);
         const s = sesiones.get(id);
-        if (s && s.paso !== 'numero') {
-            sesiones.delete(id);
+        if (s && s.paso !== 'numero' && s.paso !== 'finalizado') {
+            eliminarDatosSensiblesDeSesion(id);
         }
     }
 }
@@ -5562,7 +5615,9 @@ async function flujoTelcelTienda(ctx, id, datos) {
 // 🤖 7. INTERFAZ OFICIAL "BOT LEÓN" (BOTONES TEMPORALES Y AUTO-LIMPIEZA)
 // ==============================================================================
 async function mostrarMenuInicio(ctx, esReinicio = false) {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+    if (estaUsuarioOcupado(id)) return responderUsuarioOcupado(ctx);
     await cerrarSesionNavegador(id);
     await cerrarNavegadorBait(id);
     if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
@@ -5666,7 +5721,10 @@ bot.command(['listusers', 'usuarios', 'lista_usuarios'], async ctx => {
 
 // 🛑 COMANDOS DE CONTROL
 bot.command(['stop', 'cancelar', 'reset'], async ctx => {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+
+    invalidarEjecucionUsuario(id);
     await cerrarSesionNavegador(id);
     await cerrarNavegadorBait(id);
     if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
@@ -5703,7 +5761,9 @@ bot.command('bait', async ctx => {
 
 // 🧪 COMANDO DIRECTO TELCEL ($10) — FLUJO COMPLETO HASTA RESULTADO FINAL
 bot.command('prueba10', async ctx => {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+    if (estaUsuarioOcupado(id)) return responderUsuarioOcupado(ctx);
     await cerrarSesionNavegador(id);
     await cerrarNavegadorBait(id);
     if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
@@ -5751,27 +5811,55 @@ bot.action('btn_bait', async ctx => {
 
 bot.action('btn_reiniciar', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+    if (estaUsuarioOcupado(id)) return responderUsuarioOcupado(ctx);
     return mostrarMenuInicio(ctx, true);
 });
 
 bot.action('btn_reintentar_bait', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+    if (estaUsuarioOcupado(id)) return responderUsuarioOcupado(ctx);
+
     const s = sesiones.get(id);
     if (!s || !s.numero) {
         return mostrarMenuInicio(ctx);
     }
+
+    // Por seguridad, si el intento anterior ya terminó, no reutilizamos PAN/CVV guardados.
+    if (!s.tarjeta && !s.cc) {
+        s.paso = 'tarjeta';
+        s.enCurso = false;
+        sesiones.set(id, s);
+        return enviarLimpio(ctx,
+            `🔵 <b>BAIT — REINTENTO SEGURO</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            `📱 <b>Línea:</b> <code>${s.numero}</code>\n` +
+            `💲 <b>Monto:</b> $${s.monto || 300} MXN\n\n` +
+            `💳 <b>Vuelve a ingresar los datos de pago.</b>\n` +
+            `<i>El intento anterior fue limpiado de memoria; no se conserva CVV ni número completo de tarjeta.</i>`,
+            Markup.inlineKeyboard([[Markup.button.callback('🛑 CANCELAR', 'btn_cancelar')]])
+        );
+    }
+
     const datos = {
         ...s,
         numero: s.numero,
         monto: s.monto || 300
     };
+    s.enCurso = true;
+    sesiones.set(id, s);
     return flujoBait(ctx, id, datos);
 });
 
 bot.action('btn_cancelar', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+
+    invalidarEjecucionUsuario(id);
     await cerrarSesionNavegador(id);
     await cerrarNavegadorBait(id);
     if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
@@ -5790,15 +5878,68 @@ bot.action('btn_cancelar', async ctx => {
     if (msg && msg.message_id) registrarMensajeTemporal(id, msg.message_id);
 });
 
+// 🔄 REUTILIZACIÓN SEGURA DESPUÉS DE UNA RECARGA FINALIZADA
+bot.action('btn_recargar_otro_numero', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+    if (estaUsuarioOcupado(id)) return responderUsuarioOcupado(ctx);
+
+    const s = sesiones.get(id);
+    if (!s || s.paso !== 'finalizado' || !s.tipo || !s.monto) {
+        return mostrarMenuInicio(ctx, true);
+    }
+
+    sesiones.set(id, {
+        tipo: s.tipo,
+        modo: s.modo,
+        monto: s.monto,
+        ult4: s.ult4 || '****',
+        paso: 'numero',
+        enCurso: false
+    });
+
+    return enviarLimpio(ctx,
+        `🔄 <b>${String(s.tipo).toUpperCase()} — NUEVO NÚMERO</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+        `💲 <b>Monto conservado:</b> $${s.monto} MXN\n` +
+        `💳 <b>Referencia del método anterior:</b> •••• ${s.ult4 || '****'}\n\n` +
+        `📱 <b>Escribe el nuevo número de 10 dígitos:</b>\n` +
+        `<i>Por seguridad no se conserva CVV ni el número completo de tarjeta. Si la pasarela no entrega un token reutilizable, se solicitarán nuevamente los datos de pago.</i>`,
+        Markup.inlineKeyboard([[Markup.button.callback('🛑 CANCELAR', 'btn_cancelar')]])
+    );
+});
+
+bot.action('btn_recarga_nueva', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+    if (estaUsuarioOcupado(id)) return responderUsuarioOcupado(ctx);
+
+    invalidarEjecucionUsuario(id);
+    await cerrarSesionNavegador(id);
+    await cerrarNavegadorBait(id);
+    if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
+    await limpiarMensajesTemporales(ctx, id);
+    sesiones.delete(id);
+    return mostrarMenuInicio(ctx, true);
+});
+
 // PASO 1: SELECCIÓN DE MONTO CON BOTONES EXACTOS
 async function iniciarCompania(ctx, compania) {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+
+    if (estaUsuarioOcupado(id)) {
+        return responderUsuarioOcupado(ctx);
+    }
+
     if (compania === 'Bait') {
-        cerrarNavegadorBait(id);
+        await cerrarNavegadorBait(id);
     } else if (compania === 'Telcel.com' || compania === 'Telcel Tienda') {
-        if (cerrarNavegadorTienda) cerrarNavegadorTienda(id);
+        if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
     } else {
-        cerrarSesionNavegador(id);
+        await cerrarSesionNavegador(id);
     }
 
     const modo = (compania === 'Telcel.com' || compania === 'Telcel Tienda') ? 'telcel_tienda' : compania.toLowerCase();
@@ -5850,7 +5991,7 @@ async function iniciarCompania(ctx, compania) {
 // CALLBACKS DE SELECCIÓN DE MONTO
 bot.action(['monto_200', 'monto_230', 'monto_300', 'monto_500'], async ctx => {
     await ctx.answerCbQuery().catch(() => {});
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
     const data = ctx.match[0];
     const valorMonto = parseInt(data.replace('monto_', ''), 10);
 
@@ -5886,7 +6027,7 @@ bot.action(['monto_200', 'monto_230', 'monto_300', 'monto_500'], async ctx => {
 
 // CALLBACKS DE ADMINISTRACIÓN DE USUARIOS (PANEL DIRECTO)
 bot.action('btn_admin_add_user', async ctx => {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
     if (String(id) !== ADMIN_ID_STR) return ctx.answerCbQuery();
     await ctx.answerCbQuery().catch(() => {});
     sesiones.set(id, { paso: 'esperando_id_usuario' });
@@ -5903,7 +6044,7 @@ bot.action('btn_admin_add_user', async ctx => {
 });
 
 bot.action('btn_admin_ver_users', async ctx => {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
     if (String(id) !== ADMIN_ID_STR) return ctx.answerCbQuery();
     await ctx.answerCbQuery().catch(() => {});
 
@@ -5935,7 +6076,7 @@ bot.action('btn_noop', async ctx => {
 });
 
 bot.action(/^btn_del_user_(\d+)$/, async ctx => {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
     if (String(id) !== ADMIN_ID_STR) return ctx.answerCbQuery();
     const idEliminar = ctx.match[1];
     if (idEliminar !== ADMIN_ID_STR) {
@@ -5971,12 +6112,16 @@ bot.action(/^btn_del_user_(\d+)$/, async ctx => {
 // 📨 8. ROUTER DE MENSAJES Y PASOS POR TEXTO (INTERFAZ LIMPIA Y FLUIDA)
 // ==============================================================================
 bot.on('text', async (ctx, next) => {
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
     const txt = ctx.message.text.trim();
 
     if (txt.startsWith('/')) return next();
 
     let s = sesiones.get(id);
+
+    if (s && s.enCurso === true) {
+        return responderUsuarioOcupado(ctx);
+    }
 
     // 0. GESTIÓN DIRECTA DE AGREGAR USUARIO POR BOTÓN
     if (s && s.paso === 'esperando_id_usuario') {
@@ -6106,6 +6251,7 @@ bot.on('text', async (ctx, next) => {
         // Si ya cuenta con tarjeta cargada (reintento automático tras número inválido):
         if (s.tarjeta || s.cc) {
             s.paso = 'ejecutando';
+            s.enCurso = true;
             sesiones.set(id, s);
 
             if (nombreFlujo === 'TELCEL.COM') {
@@ -6192,16 +6338,22 @@ bot.on('text', async (ctx, next) => {
 
         if (s.modo === 'telcel_tienda' || s.tipo === 'Telcel.com' || s.tipo === 'Telcel Tienda') {
             s.paso = 'ejecutando';
+            s.enCurso = true;
+            sesiones.set(id, s);
             flujoTelcelTienda(ctx, id, s).catch(err => {
                 console.error(`[Telcel.com Usuario ${id}] Error:`, err.message || err);
             });
         } else if (s.modo === 'bait' || s.tipo === 'Bait') {
             s.paso = 'ejecutando';
+            s.enCurso = true;
+            sesiones.set(id, s);
             flujoBait(ctx, id, s).catch(err => {
                 console.error(`[Bait Usuario ${id}] Error:`, err.message || err);
             });
         } else {
             s.paso = 'ejecutando';
+            s.enCurso = true;
+            sesiones.set(id, s);
             flujoTelcelIndependiente(ctx, id, s).catch(err => {
                 console.error(`[Telcel Usuario ${id}] Error:`, err.message || err);
             });
@@ -6239,8 +6391,8 @@ process.once('SIGINT', async () => {
     for (const [id] of navegadoresActivos) {
         await cerrarSesionNavegador(id);
     }
-    await cerrarNavegadorBait();
-    await cerrarNavegadorTienda();
+    await cerrarTodosNavegadoresBait();
+    await cerrarTodosNavegadoresTienda();
     servidor.close(() => process.exit(0));
 });
 
@@ -6249,8 +6401,8 @@ process.once('SIGTERM', async () => {
     for (const [id] of navegadoresActivos) {
         await cerrarSesionNavegador(id);
     }
-    await cerrarNavegadorBait();
-    await cerrarNavegadorTienda();
+    await cerrarTodosNavegadoresBait();
+    await cerrarTodosNavegadoresTienda();
     servidor.close(() => process.exit(0));
 });
 
@@ -6402,7 +6554,12 @@ function netflixGenerarPassword() {
 
 async function mostrarMenuCategoriasPrincipal(ctx) {
 
-    const id = ctx.chat?.id || ctx.from?.id;
+    const id = obtenerChatId(ctx);
+    if (id === null) return;
+
+    if (estaUsuarioOcupado(id)) {
+        return responderUsuarioOcupado(ctx);
+    }
 
     await limpiarMensajesTemporales(ctx, id).catch(() => {});
 
@@ -6564,9 +6721,7 @@ bot.action(
 
         await ctx.answerCbQuery().catch(() => {});
 
-        const id =
-            ctx.chat?.id ||
-            ctx.from?.id;
+        const id = obtenerChatId(ctx);
 
         sesionesNetflixStreaming.set(
             id,
@@ -6630,9 +6785,7 @@ bot.action(
 
         await ctx.answerCbQuery().catch(() => {});
 
-        const id =
-            ctx.chat?.id ||
-            ctx.from?.id;
+        const id = obtenerChatId(ctx);
 
         const correo =
             netflixGenerarCorreo();
@@ -6692,9 +6845,7 @@ bot.action(
 
         await ctx.answerCbQuery().catch(() => {});
 
-        const id =
-            ctx.chat?.id ||
-            ctx.from?.id;
+        const id = obtenerChatId(ctx);
 
         sesionesNetflixStreaming.set(
             id,
@@ -6731,9 +6882,7 @@ bot.on(
     'text',
     async (ctx, next) => {
 
-        const id =
-            ctx.chat?.id ||
-            ctx.from?.id;
+        const id = obtenerChatId(ctx);
 
         const estado =
             sesionesNetflixStreaming.get(id);
@@ -6847,9 +6996,7 @@ bot.action(
 
         await ctx.answerCbQuery().catch(() => {});
 
-        const id =
-            ctx.chat?.id ||
-            ctx.from?.id;
+        const id = obtenerChatId(ctx);
 
         const estado =
             sesionesNetflixStreaming.get(id);
@@ -7330,9 +7477,7 @@ bot.action(
 
         await ctx.answerCbQuery().catch(() => {});
 
-        const id =
-            ctx.chat?.id ||
-            ctx.from?.id;
+        const id = obtenerChatId(ctx);
 
         sesionesNetflixStreaming.delete(id);
 
@@ -7345,5 +7490,6 @@ bot.action(
 // ==============================================================================
 
 iniciarServidorYBot();
+
 
 
