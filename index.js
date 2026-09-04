@@ -2094,6 +2094,7 @@ console.log(
     const TIMEOUT_AVANCE_MS = 15000;
     let btnEncontrado = null;
     let logueadoBotonDeshabilitado = false;
+    let revalidacionCamposEjecutada = false;
 
     while (Date.now() - inicioEsperaAvance < TIMEOUT_AVANCE_MS) {
         const verifLoop = await detectarNumeroInvalido(pag);
@@ -2156,6 +2157,35 @@ console.log(
                     console.log(`[Bait Usuario ${id}] BOTON_AVANCE_VISIBLE=true`);
                     console.log(`[Bait Usuario ${id}] BOTON_AVANCE_ENABLED=false`);
                 }
+
+                // BAIT puede conservar el valor visual pero no actualizar su estado interno
+                // hasta recibir focus/input/change/blur reales. Se hace UNA sola revalidación
+                // controlada; nunca se fuerza el clic de un botón realmente deshabilitado.
+                if (!revalidacionCamposEjecutada) {
+                    revalidacionCamposEjecutada = true;
+                    console.log(`[Bait Usuario ${id}] 🔄 Revalidando campos BAIT antes de declarar el botón bloqueado...`);
+
+                    try {
+                        await inputTel.focus();
+                        await inputTel.press('End').catch(() => {});
+                        await inputTel.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                        await inputTel.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                        await inputTel.press('Tab').catch(() => {});
+                    } catch (_) {}
+
+                    try {
+                        await inputMail.focus();
+                        await inputMail.press('End').catch(() => {});
+                        await inputMail.dispatchEvent('input', { bubbles: true }).catch(() => {});
+                        await inputMail.dispatchEvent('change', { bubbles: true }).catch(() => {});
+                        await inputMail.press('Tab').catch(() => {});
+                    } catch (_) {}
+
+                    await pag.waitForTimeout(500);
+                    btnEncontrado = null;
+                    continue;
+                }
+
                 // NO usar force:true para intentar saltarse un botón deshabilitado
                 btnEncontrado = null;
             }
@@ -2177,6 +2207,33 @@ console.log(
         const err = new Error("ERROR_BAIT_TEMPORAL");
         err.codigo = "ERROR_BAIT_TEMPORAL";
         throw err;
+    }
+
+    // Diagnóstico final útil para Render/Telegram: revela qué campo o validación
+    // quedó pendiente sin exponer datos de tarjeta.
+    try {
+        const diagTel = {
+            valor: String(await inputTel.inputValue().catch(() => '')).replace(/\D/g, ''),
+            disabled: await inputTel.isDisabled().catch(() => false),
+            ariaInvalid: await inputTel.getAttribute('aria-invalid').catch(() => null)
+        };
+        const diagCorreo = {
+            valor: String(await inputMail.inputValue().catch(() => '')).trim(),
+            disabled: await inputMail.isDisabled().catch(() => false),
+            ariaInvalid: await inputMail.getAttribute('aria-invalid').catch(() => null)
+        };
+        const erroresForm = [];
+        const candidatosError = modal.locator('[role="alert"], .error, .invalid-feedback, .text-danger, [class*="error" i]');
+        const nErrores = Math.min(await candidatosError.count().catch(() => 0), 8);
+        for (let i = 0; i < nErrores; i++) {
+            const t = String(await candidatosError.nth(i).innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+            if (t && !erroresForm.includes(t)) erroresForm.push(t.slice(0, 180));
+        }
+        console.log(`[Bait Usuario ${id}] DIAG_TEL=${JSON.stringify(diagTel)}`);
+        console.log(`[Bait Usuario ${id}] DIAG_CORREO=${JSON.stringify(diagCorreo)}`);
+        console.log(`[Bait Usuario ${id}] ERRORES_FORM=${JSON.stringify(erroresForm)}`);
+    } catch (diagErr) {
+        console.log(`[Bait Usuario ${id}] DIAG_FORM_ERROR=${String(diagErr?.message || diagErr).slice(0, 180)}`);
     }
 
     const err = new Error("BOTON_AVANCE_NO_HABILITADO");
@@ -7725,5 +7782,7 @@ bot.action(
 // ==============================================================================
 
 iniciarServidorYBot();
+
+
 
 
