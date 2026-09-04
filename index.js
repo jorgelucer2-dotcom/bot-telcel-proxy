@@ -6162,7 +6162,22 @@ bot.on('text', async (ctx, next) => {
     }
 
     if (!s) {
-        return mostrarMenuInicio(ctx);
+        // No devolver silenciosamente al menú: si Render reinició o el mensaje llegó
+        // a otra instancia, el usuario debe saber que el estado de la recarga se perdió.
+        // Nunca registrar el texto recibido aquí: podría contener datos de pago.
+        console.warn(`⚠️ [Usuario ${id}] Mensaje recibido sin sesión activa; posible reinicio o conflicto de instancia.`);
+        return enviarLimpio(ctx,
+            `⚠️ <b>LA SESIÓN DE LA RECARGA YA NO ESTÁ ACTIVA</b>
+` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+            `El bot pudo haberse reiniciado o cambiado de instancia.
+
+` +
+            `🔐 Por seguridad, los datos de pago no se conservaron.
+` +
+            `👉 Usa <b>/start</b> para iniciar nuevamente.`
+        );
     }
 
     // B. DETECCIÓN DE MONTO EN TEXTO
@@ -6462,9 +6477,37 @@ function iniciarServidorYBot() {
         }
     }
 
+    // Evita reintentos superpuestos de long polling cuando Telegram devuelve 409.
+    // Un 409 real sigue significando que otra instancia usa el mismo BOT_TOKEN;
+    // este control impide que ESTE proceso acumule intentos mientras la anterior se cierra.
+    let telegramIniciando = false;
+    let telegramConectado = false;
+    let telegramRetryTimer = null;
+    let telegramIntento = 0;
+
+    function programarReintentoTelegram(ms = 12000) {
+        if (telegramRetryTimer || telegramConectado) return;
+
+        console.log(`⚠️ Telegram ocupado por otra instancia. Nuevo intento único en ${Math.round(ms / 1000)}s...`);
+        telegramRetryTimer = setTimeout(() => {
+            telegramRetryTimer = null;
+            iniciarTelegramBot().catch(err => {
+                console.error('❌ ERROR AL REINTENTAR TELEGRAM:', err?.message || err);
+            });
+        }, ms);
+        telegramRetryTimer.unref?.();
+    }
+
     async function iniciarTelegramBot() {
+        if (telegramIniciando || telegramConectado) return;
+
+        telegramIniciando = true;
+        telegramIntento += 1;
+
         try {
+            // Configurar comandos una sola vez por intento de arranque; no crea polling extra.
             await configurarComandosTelegram();
+
             await bot.launch({
                 dropPendingUpdates: true,
                 polling: {
@@ -6473,17 +6516,35 @@ function iniciarServidorYBot() {
                     autoStart: true
                 }
             });
+
+            telegramConectado = true;
+            telegramIntento = 0;
+            if (telegramRetryTimer) {
+                clearTimeout(telegramRetryTimer);
+                telegramRetryTimer = null;
+            }
             console.log("🦁 LISTO: BOT LEÓN CONECTADO EXITOSAMENTE A TELEGRAM");
         } catch (err) {
-            if (err.message && (err.message.includes('409') || err.message.includes('Conflict'))) {
-                console.log("⚠️ Conflicto 409 detectado (otra instancia activa cerrándose). Reintentando en 6s...");
-                setTimeout(iniciarTelegramBot, 6000);
+            const mensaje = String(err?.message || err || '');
+            telegramConectado = false;
+
+            if (mensaje.includes('409') || /conflict/i.test(mensaje)) {
+                console.log(`⚠️ Conflicto 409 detectado en intento ${telegramIntento}. No se crearán reintentos superpuestos.`);
+
+                // Backoff corto pero suficiente para que Render cierre la instancia anterior.
+                const espera = Math.min(30000, 12000 + Math.max(0, telegramIntento - 1) * 3000);
+                programarReintentoTelegram(espera);
             } else {
-                console.error("❌ ERROR BOT LEÓN:", err.message || err);
+                console.error("❌ ERROR BOT LEÓN:", mensaje);
             }
+        } finally {
+            telegramIniciando = false;
         }
     }
-    iniciarTelegramBot();
+
+    iniciarTelegramBot().catch(err => {
+        console.error('❌ ERROR INICIAL TELEGRAM:', err?.message || err);
+    });
 }
 
 // ==============================================================================
