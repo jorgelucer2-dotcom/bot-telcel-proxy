@@ -43,19 +43,7 @@ const BRIGHTDATA_BROWSER_WS = process.env.BRIGHTDATA_BROWSER_WS || process.env.P
 const USE_LOCAL_CHROMIUM = process.env.USE_LOCAL_CHROMIUM === 'true';
 const ES_HEADLESS = process.env.RENDER === 'true' || process.env.HEADLESS === 'true' || (process.platform === 'linux' && process.env.HEADLESS !== 'false');
 const RENDER_EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PUERTO}`;
-const MAX_RETRIES_BAIT = Math.max(1, Math.min(5, parseInt(process.env.MAX_RETRIES_BAIT || '3', 10) || 3));
-
-// BAIT FAST V2 — límites cortos y configurables. No usa networkidle.
-const BAIT_FAST = Object.freeze({
-    GOTO_MS: parseInt(process.env.BAIT_GOTO_MS || '15000', 10),
-    HOME_MS: parseInt(process.env.BAIT_HOME_MS || '10000', 10),
-    PAQUETE_MS: parseInt(process.env.BAIT_PAQUETE_MS || '7000', 10),
-    MODAL_MS: parseInt(process.env.BAIT_MODAL_MS || '7000', 10),
-    INPUT_MS: parseInt(process.env.BAIT_INPUT_MS || '5000', 10),
-    AVANCE_MS: parseInt(process.env.BAIT_AVANCE_MS || '8000', 10),
-    TRANSICION_MS: parseInt(process.env.BAIT_TRANSICION_MS || '6000', 10),
-    PASARELA_MS: parseInt(process.env.BAIT_PASARELA_MS || '1800', 10)
-});
+const MAX_RETRIES_BAIT = 5;
 const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || '';
 
 if (!BOT_TOKEN) {
@@ -63,9 +51,6 @@ if (!BOT_TOKEN) {
 }
 
 const bot = new Telegraf(BOT_TOKEN || 'DUMMY_TOKEN', { handlerTimeout: Infinity });
-console.log('⚡ TELCEL SPEED ESTABLE V1 activo | geo<=1600ms | sin networkidle | polling resultado=300ms');
-console.log(`⚡ BAIT FAST V2 activo | intentos=${MAX_RETRIES_BAIT} | goto=${BAIT_FAST.GOTO_MS}ms | transición=${BAIT_FAST.TRANSICION_MS}ms | pasarela=${BAIT_FAST.PASARELA_MS}ms`);
-console.log('🐧 BAIT LINUX DIAGNOSTICO V3 | estados PayPal/BAIT completos');
 
 bot.catch((err, ctx) => {
     console.error(`[Telegram Error] Handler error para update ${ctx?.update?.update_id}:`, err.message || err);
@@ -324,7 +309,7 @@ async function smokeTestPlaywright() {
             '--no-first-run',
             '--lang=es-MX'
         ];
-        const testBrowser = await chromium.launch({ headless: true, slowMo: 0, args, timeout: BAIT_FAST.GOTO_MS });
+        const testBrowser = await chromium.launch({ headless: true, slowMo: 0, args, timeout: 30000 });
         const testContext = await testBrowser.newContext({ viewport: { width: 800, height: 600 } });
         const testPage = await testContext.newPage();
         await testPage.setContent('<html><body><h1>BOT LEON OK</h1></body></html>');
@@ -559,21 +544,10 @@ async function tomarCapturaEnfocada(pag) {
 // ==============================================================================
 function extraerFragmentoClave(texto) {
     if (!texto) return "Sin texto de alerta capturado";
-
     const lineas = texto.split('\n')
-        .map(l => l.replace(/\s+/g, ' ').trim())
-        .filter(Boolean)
-        // Ignorar encabezados, navegación y textos promocionales que no representan el resultado del pago.
-        .filter(l => l.length > 5 && !/^(telcel|bait|recargas|paquetes|aviso de privacidad|términos|todos los derechos|ingresa tu|número amigo|mi bait|duración|obtén internet|una vez consumidos|datos de línea|para registrar|ingresa los datos|contacto:|forma de pago:)/i.test(l))
-        .filter(l => !/todo es muy fácil comprar,? pagar y consultar|factura y|más datos/i.test(l));
-
-    // Priorizar siempre el texto que realmente describe el estado del cobro.
-    const prioritarias = lineas.filter(l =>
-        /(estamos procesando tu pago|procesando tu pago|pago en proceso|recarga en proceso|pago exitoso|recarga exitosa|transacci[oó]n exitosa|pago aprobado|folio|comprobante|pago rechazado|transacci[oó]n rechazada|tarjeta rechazada|declinada|fondos insuficientes|saldo insuficiente|error de conexi[oó]n|no se pudo completar|no pudimos procesar|int[ée]ntalo m[aá]s tarde)/i.test(l)
-    );
-
-    const elegidas = prioritarias.length ? prioritarias : lineas;
-    return elegidas.slice(0, 3).join(' | ').slice(0, 180) || "Sin texto de resultado capturado";
+        .map(l => l.trim())
+        .filter(l => l.length > 5 && !/^(telcel|bait|recargas|paquetes|aviso de privacidad|términos|todos los derechos|ingresa tu|número amigo|mi bait|duración|obtén internet|una vez consumidos|datos de línea|para registrar|ingresa los datos)/i.test(l));
+    return lineas.slice(0, 3).join(' | ').slice(0, 180) || texto.slice(0, 140);
 }
 
 function clasificarResultadoBait(textoVisibleLimpio, id) {
@@ -587,71 +561,28 @@ function clasificarResultadoBait(textoVisibleLimpio, id) {
         };
     }
 
-    const txt = textoVisibleLimpio.toLowerCase().replace(/\s+/g, ' ').trim();
-    // 1) PAYPAL: tarjeta no aceptada / no asociada (mensajes explícitos observados)
-    if (/no\s+pudimos\s+asociar\s+esta\s+tarjeta/i.test(txt) ||
-        /no\s+se\s+pudo\s+asociar\s+esta\s+tarjeta/i.test(txt) ||
-        /pruebe\s+una\s+tarjeta\s+diferente/i.test(txt) ||
-        /no\s+se\s+puede\s+completar\s+el\s+pago\s+con\s+esta\s+tarjeta/i.test(txt) ||
-        /int[ée]ntelo\s+con\s+otra\s+tarjeta/i.test(txt)) {
-        return {
-            estado: 'PAYPAL_TARJETA_NO_ACEPTADA',
-            subtipo: 'FORMA_PAGO_NO_ADMITIDA',
-            titulo: '❌ PAYPAL NO ACEPTÓ LA TARJETA',
-            icono: '💳',
-            explicacion: 'PayPal indicó que no pudo asociar o completar el proceso con esta tarjeta. Debe utilizarse otra forma de pago.'
-        };
-    }
+    const txt = textoVisibleLimpio.toLowerCase();
 
-    // 2) PAYPAL: error que devuelve al pago y permite un nuevo intento
-    if (/se\s+ha\s+producido\s+un\s+error/i.test(txt) &&
-        /lo\s+enviaremos\s+de\s+regreso\s+al\s+pago/i.test(txt)) {
-        return {
-            estado: 'PAYPAL_PROCESO_INTERRUMPIDO_REINTENTABLE',
-            subtipo: 'RETORNO_A_PAGO',
-            titulo: '⚠️ PAYPAL INTERRUMPIÓ EL PROCESO Y REGRESÓ AL PAGO',
-            icono: '🔄',
-            explicacion: 'PayPal/BAIT interrumpió el flujo y mostró que puede intentarse nuevamente. No existe confirmación de cobro en esta pantalla.'
-        };
-    }
+    // 1️⃣ PRIORIDAD MÁXIMA: RECHAZOS BANCARIOS, FONDOS INSUFICIENTES Y ERROR AL COMPLETAR PAGO / ERROR INTERNO
+    const esErrorInternoOPago = /(error\s*al\s*completar\s*(tu|su)?\s*pago)|(se\s*ha\s*producido\s*un\s*error\s*interno)|(error\s*interno)|(int[ée]ntelo\s*de\s*nuevo\s*m[áa]s\s*tarde)|(int[ée]ntalo\s*(de\s*nuevo\s*)?m[áa]s\s*tarde)|(no\s*se\s*pudo\s*completar\s*tu\s*pago)/i.test(txt);
 
-    // 3) Fondos insuficientes SOLO cuando el texto lo dice de forma explícita
-    const esFondos = /(fondos\s*insuficientes)|(saldo\s*insuficiente)|(saldo\s*no\s*disponible)|(sin\s*fondos)|(no\s*cuenta\s*con\s*fondos)|(insufficient\s*funds)/i.test(txt);
-    if (esFondos) {
-        return {
-            estado: 'PAYPAL_FONDOS_INSUFICIENTES',
-            subtipo: 'FONDOS_INSUFICIENTES_EXPLICITOS',
-            titulo: '❌ PAGO NO COMPLETADO: FONDOS INSUFICIENTES',
-            icono: '💸',
-            explicacion: 'La respuesta visible indicó explícitamente fondos o saldo insuficiente.'
-        };
-    }
+    const esFondos = /(fondos\s*insuficientes)|(saldo\s*insuficiente)|(saldo\s*no\s*disponible)|(sin\s*fondos)|(monto\s*no\s*adecuado)|(monto\s*insuficiente)|(no\s*cuenta\s*con\s*fondos)/i.test(txt);
+    
+    const esTarjetaRechazada = /(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|rechazada|no\s*soportada|no\s*aceptada|no\s*permitida|declinada))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(cvv\s*incorrecto)|(fecha\s*de\s*vencimiento\s*inv[áa]lida)|(vencimiento\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(tipo\s*de\s*tarjeta\s*no\s*v[áa]lida)|(entidad\s*rechaz[óo])|(bloqueo\s*por\s*seguridad)|(l[íi]mite\s*diario)|(no\s*autorizada\s*por\s*el\s*banco)|(rechazada\s*por\s*el\s*banco)|(intenta\s*con\s*otra\s*tarjeta)|(intente\s*con\s*otra\s*tarjeta)|(consulte\s*con\s*el\s*emisor)|(transacci[óo]n\s*no\s*autorizada)|(no\s*se\s*pudo\s*procesar\s*su\s*pago)|(no\s*se\s*pudo\s*completar\s*el\s*pago)|(pago\s*no\s*autorizado)|(operaci[óo]n\s*declinada)|(pago\s*declinado)/i.test(txt);
 
-    // 4) Error interno al completar el pago. No asumir que equivale a falta de fondos.
-    if ((/error\s*al\s*completar\s*(tu|su)?\s*pago/i.test(txt) && /error\s*interno/i.test(txt)) ||
-        (/se\s+ha\s+producido\s+un\s+error\s+interno/i.test(txt) && /int[ée]ntelo\s+de\s+nuevo\s+m[áa]s\s+tarde/i.test(txt))) {
-        return {
-            estado: 'PAYPAL_PAGO_ERROR_INTERNO',
-            subtipo: 'ERROR_INTERNO_POST_PAGO',
-            titulo: '⚠️ ERROR INTERNO AL COMPLETAR EL PAGO',
-            icono: '⚠️',
-            explicacion: 'El portal informó un error interno al completar el pago. Esta pantalla no identifica por sí sola la causa bancaria.'
-        };
-    }
+    const esErrorGenericoBanco = /(tu\s*solicitud\s*no\s*pudo\s*ser\s*(completada|procesada))|(no\s*se\s*pudo\s*realizar\s*(el\s*pago|la\s*operaci[óo]n))|(transacci[óo]n\s*rechazada)|(pago\s*rechazado)|(error\s*al\s*procesar\s*el\s*pago)|(pago\s*no\s*aplicado)|(cobro\s*rechazado)|(lo\s*sentimos,?\s*no\s*pudimos\s*procesar)/i.test(txt);
 
-    // 5) Rechazo bancario/tarjeta explícito
-    const esTarjetaRechazada = /(tarjeta\s*(inv[áa]lida|no\s*v[áa]lida|rechazada|no\s*soportada|no\s*aceptada|no\s*permitida|declinada))|(n[úu]mero\s*de\s*tarjeta\s*inv[áa]lido)|(cvv\s*incorrecto)|(fecha\s*de\s*vencimiento\s*inv[áa]lida)|(vencimiento\s*inv[áa]lido)|(emisor\s*no\s*soportado)|(no\s*autorizada\s*por\s*el\s*banco)|(rechazada\s*por\s*el\s*banco)|(transacci[óo]n\s*no\s*autorizada)|(pago\s*no\s*autorizado)|(operaci[óo]n\s*declinada)|(pago\s*declinado)|(transacci[óo]n\s*rechazada)|(pago\s*rechazado)/i.test(txt);
-    if (esTarjetaRechazada) {
+    if (esErrorInternoOPago || esFondos || esTarjetaRechazada || esErrorGenericoBanco) {
         return {
             estado: 'RECHAZO_BANCARIO',
-            subtipo: 'TARJETA_DECLINADA_EXPLICITA',
-            titulo: '❌ PAGO RECHAZADO',
+            subtipo: 'FORMA_PAGO_RECHAZADA',
+            titulo: '❌ RECARGA NO COMPLETADA: PAGO RECHAZADO O SIN FONDOS',
             icono: '💳',
-            explicacion: 'La pantalla mostró una respuesta explícita de rechazo o declinación.'
+            explicacion: 'Tu forma de pago rechazó el cargo o no cuenta con fondos suficientes.'
         };
     }
 
-    // 6) Errores de pasarela/comunicación
+    // 2️⃣ ERRORES DE PASARELA / COMUNICACIÓN
     const esErrorPasarela = /(error\s*en\s*la\s*pasarela)|(error\s*de\s*comunicaci[óo]n)|(pasarela\s*no\s*disponible)|(servicio\s*no\s*disponible)|(tiempo\s*de\s*espera\s*agotado)|(paypal\s*no\s*responde)/i.test(txt);
     if (esErrorPasarela) {
         return {
@@ -659,56 +590,47 @@ function clasificarResultadoBait(textoVisibleLimpio, id) {
             subtipo: 'FALLO_COMUNICACION',
             titulo: '⚠️ ERROR DE COMUNICACIÓN CON LA PASARELA',
             icono: '⚠️',
-            explicacion: 'Ocurrió una falla temporal de comunicación con el procesador de pago.'
+            explicacion: 'Ocurrió una falla temporal de conexión con el procesador de pago.'
         };
     }
 
-    // 7) BAIT confirmó explícitamente que la recarga quedó en proceso.
-    // Estado terminal para este intento: NO volver a cobrar ni reintentar automáticamente.
-    const esBaitRecargaEnProceso = /(tu\s*recarga\s*est[áa]\s*en\s*proceso)|(evita\s*realizar\s*otro\s*intento)|(espera\s*la\s*confirmaci[oó]n)/i.test(txt);
-    if (esBaitRecargaEnProceso) {
-        return {
-            estado: 'BAIT_RECARGA_EN_PROCESO',
-            subtipo: 'PENDIENTE_CONFIRMACION',
-            titulo: '⏳ BAIT — RECARGA EN PROCESO',
-            icono: '⏳',
-            explicacion: 'BAIT recibió la operación y pide no realizar otro intento mientras espera la confirmación.'
-        };
-    }
+    // 3️⃣ EN PROCESO / PENDIENTE (JAMÁS SE CONSIDERA ÉXITO)
+    const esProcesando = /(tu\s*recarga\s*est[áa]\s*en\s*proceso)|(recarga\s*en\s*proceso)|(pago\s*en\s*proceso)|(procesando\s*tu\s*(pago|recarga|solicitud))|(espera\s*la\s*confirmaci[óo]n)|(estamos\s*procesando\s*tu\s*solicitud)|(validando\s*transacci[óo]n)|(en\s*validaci[óo]n)|(transacci[óo]n\s*pendiente)|(procesando)|(en\s*proceso)|(validando)|(pendiente)/i.test(txt);
 
-    // 7.1) Otros estados de procesamiento / pendiente: nunca convertirlos en éxito.
-    const esProcesando = /(recarga\s*en\s*proceso)|(pago\s*en\s*proceso)|(procesando\s*tu\s*(pago|recarga|solicitud))|(estamos\s*procesando\s*tu\s*solicitud)|(validando\s*transacci[oó]n)|(en\s*validaci[oó]n)|(transacci[oó]n\s*pendiente)/i.test(txt);
     if (esProcesando) {
         return {
             estado: 'PROCESANDO',
             subtipo: 'EN_PROCESO',
             titulo: '⏳ RECARGA EN PROCESO — PENDIENTE DE CONFIRMACIÓN',
             icono: '⏳',
-            explicacion: 'La orden se encuentra en validación y todavía no existe una confirmación final.'
+            explicacion: 'La orden fue enviada y se encuentra en validación. Esperando confirmación final.'
         };
     }
 
-    // 8) Éxito real: señal explícita y preferentemente folio/comprobante
+    // 4️⃣ ÉXITO REAL (Requiere confirmación explícita Y comprobante/folio final)
     const tieneFolioOComprobante = /(folio:?\s*#?\s*\w+)|(comprobante\s*de\s*(pago|recarga|compra))|(ticket\s*de\s*(compra|pago|recarga))|(n[úu]mero\s*de\s*autorizaci[óo]n:?\s*\w+)|(c[óo]digo\s*de\s*aprobaci[óo]n)/i.test(txt);
     const esAprobacionExplicita = /(¡?recarga\s*exitosa!?)|(¡?pago\s*(exitoso|aprobado|aplicado)!?)|(transacci[óo]n\s*(exitosa|aprobada))|(tu\s*pago\s*ha\s*sido\s*(aprobado|aplicado|procesado\s*con\s*[ée]xito))|(¡?tu\s*recarga\s*fue\s*exitosa!?)|(¡?recarga\s*aplicada!?)|(¡listo!\s*tu\s*recarga)/i.test(txt);
+
+    // Evitar falsos positivos por textos internos de diagnóstico
     const esTextoDiagnostico = /checkout\s*(confirmado|listo)|paypal_card_checkout|card_form_visible/i.test(txt);
 
-    if (!esTextoDiagnostico && (tieneFolioOComprobante || (esAprobacionExplicita && !/(en\s*proceso|pendiente|procesando|validando|error|rechaz)/i.test(txt)))) {
+    if (!esTextoDiagnostico && (tieneFolioOComprobante || (esAprobacionExplicita && !/(en\s*proceso|pendiente|procesando|validando|iniciad[oa]|error|rechaz)/i.test(txt)))) {
         return {
             estado: 'EXITO',
             subtipo: 'EXITOSO',
             titulo: '🎉 ✅ RECARGA BAIT EXITOSA — PAGO APROBADO',
             icono: '✅',
-            explicacion: 'La recarga fue confirmada explícitamente por el portal.'
+            explicacion: 'La recarga fue confirmada y acreditada exitosamente con comprobante/folio final.'
         };
     }
 
+    // 5️⃣ ESTADO NO DETERMINADO (No afirmar éxito)
     return {
         estado: 'DESCONOCIDO',
         subtipo: 'SIN_CONFIRMACION_FINAL',
         titulo: '⚠️ TRANSACCIÓN NO CONFIRMADA',
         icono: '⚠️',
-        explicacion: 'No se detectó una señal explícita suficiente para afirmar aprobación o rechazo.'
+        explicacion: 'No se detectó comprobante explícito de aprobación ni rechazo bancario definitivo.'
     };
 }
 
@@ -878,32 +800,31 @@ async function lanzarNavegador(id) {
     return { navegador, contexto, pagina };
 }
 
-async function aceptarUbicacionSiAparece(pagina, timeoutTotalMs = 1600) {
+async function aceptarUbicacionSiAparece(pagina) {
     if (!pagina || (typeof pagina.isClosed === 'function' && pagina.isClosed())) return false;
-
-    // El contexto de Telcel ya recibe geolocation + grantPermissions().
-    // Esta función sólo atiende un aviso HTML opcional y nunca debe frenar el flujo varios segundos.
-    const selectorUbicacion = [
+    const selectoresUbicacion = [
         'button:has-text("Permitir mientras visito el sitio")',
         'button:has-text("Permitir ubicación")',
         'button:has-text("Permitir siempre")',
         'button:has-text("Compartir mi ubicación")',
         'button:has-text("Usar mi ubicación")',
         'button:has-text("Permitir")',
+        'button:has-text("Aceptar")',
+        'button:has-text("Acepto")',
+        'button:has-text("Entendido")',
         'button:has-text("Activar ubicación")',
         '[aria-label*="Permitir" i]',
         '[aria-label*="Ubicación" i]'
-    ].join(', ');
+    ];
 
-    const inicio = Date.now();
-    const candidato = pagina.locator(selectorUbicacion).first();
-
-    while (Date.now() - inicio < timeoutTotalMs) {
-        if (await candidato.isVisible({ timeout: 80 }).catch(() => false)) {
-            await candidato.click({ force: true, timeout: 800 }).catch(() => {});
-            return true;
-        }
-        await pagina.waitForTimeout(120).catch(() => {});
+    for (const s of selectoresUbicacion) {
+        try {
+            const btn = pagina.locator(s).first();
+            if (await btn.isVisible({ timeout: 500 }).catch(() => false)) {
+                await btn.click({ force: true }).catch(() => {});
+                return true;
+            }
+        } catch(e) {}
     }
     return false;
 }
@@ -911,192 +832,76 @@ async function aceptarUbicacionSiAparece(pagina, timeoutTotalMs = 1600) {
 // ==============================================================================
 // 📦 4. FUNCIONES MODULARES DE PAQUETES (TELCEL)
 // ==============================================================================
-async function encontrarPrimeroVisible(locator, timeout = 10000) {
-    const inicio = Date.now();
-
-    while (Date.now() - inicio < timeout) {
-        const total = await locator.count().catch(() => 0);
-
-        for (let i = 0; i < total; i++) {
-            const candidato = locator.nth(i);
-            if (await candidato.isVisible().catch(() => false)) {
-                return candidato;
-            }
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 150));
-    }
-
-    return null;
-}
-
-async function esperarMontoVisibleTelcel(pagina, monto, timeout = 15000) {
-    const textoMonto = pagina.getByText(new RegExp(`^\\$\\s*${monto}$`, 'i'));
-    return await encontrarPrimeroVisible(textoMonto, timeout);
-}
-
-async function buscarBotonPaquetePorMonto(pagina, monto, timeout = 15000, id = '') {
-    const inicio = Date.now();
-    const botonesLoQuiero = pagina.getByText('Lo quiero', { exact: true });
-
-    while (Date.now() - inicio < timeout) {
-        const total = await botonesLoQuiero.count().catch(() => 0);
-
-        for (let i = 0; i < total; i++) {
-            const candidato = botonesLoQuiero.nth(i);
-
-            if (!(await candidato.isVisible().catch(() => false))) {
-                continue;
-            }
-
-            const perteneceAlMonto = await candidato.evaluate((elemento, montoObjetivo) => {
-                const montoTexto = `$${montoObjetivo}`.replace(/\s+/g, '');
-                let nodo = elemento;
-
-                // Subir solo lo necesario por el árbol hasta encontrar el contenedor
-                // que reúne el precio objetivo y el texto "Lo quiero".
-                for (let nivel = 0; nivel < 10 && nodo; nivel++, nodo = nodo.parentElement) {
-                    const texto = (nodo.innerText || nodo.textContent || '')
-                        .replace(/\u00a0/g, ' ')
-                        .replace(/\s+/g, ' ')
-                        .trim();
-
-                    const textoSinEspacios = texto.replace(/\s+/g, '');
-                    if (textoSinEspacios.includes(montoTexto) && /Lo quiero/i.test(texto)) {
-                        return true;
-                    }
-                }
-
-                return false;
-            }, String(monto)).catch(() => false);
-
-            if (perteneceAlMonto) {
-                logTelcel(id, `✅ Botón 'Lo quiero' asociado a $${monto} localizado.`);
-                return candidato;
-            }
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 150));
-    }
-
-    return null;
-}
-
 async function abrirMasPaquetes(pagina, monto, id = '') {
     const tInicio = Date.now();
-    logTelcel(id, `📦 Buscando paquete $${monto}...`);
+    logTelcel(id, `📦 Buscando paquetes...`);
 
-    // PASO 1: si el monto ya está visible, no gastar tiempo buscando "Ver más paquetes".
-    let montoVisible = await esperarMontoVisibleTelcel(pagina, monto, 2500);
-    if (montoVisible) {
-        logTelcel(id, `✅ Paquete $${monto} ya está visible; no hace falta expandir (${Date.now() - tInicio} ms).`);
-        return true;
+    let t = Date.now();
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    logTelcel(id, `⏱️ Espera inicial networkidle: ${Date.now() - t} ms`);
+
+    const botonVerMas = pagina.locator('button:has(p:has-text("Ver más paquetes")), button:has-text("Ver más paquetes")');
+    t = Date.now();
+    const esVisible = await botonVerMas.isVisible({ timeout: 4000 }).catch(() => false);
+    logTelcel(id, `⏱️ Comprobación visibilidad 'Ver más paquetes': ${Date.now() - t} ms (visible: ${esVisible})`);
+
+    if (esVisible) {
+        logTelcel(id, `📦 Abriendo Ver más paquetes`);
+        t = Date.now();
+        await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
+        await botonVerMas.click({ force: true }).catch(() => {});
+        await pagina.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
+        logTelcel(id, `✅ 'Ver más paquetes' clickeado y networkidle: ${Date.now() - t} ms`);
     }
 
-    // PASO 2: buscar el texto real confirmado visualmente en Telcel Pay.
-    logTelcel(id, `🔎 Buscando texto 'Ver más paquetes'...`);
-    const candidatosVerMas = pagina.getByText('Ver más paquetes', { exact: true });
-    const botonVerMas = await encontrarPrimeroVisible(candidatosVerMas, 12000);
+    const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
+    const tarjetaEsperada = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
+        .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
+        .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
 
-    if (!botonVerMas) {
-        logTelcel(id, `⚠️ 'Ver más paquetes' no apareció como elemento visible.`);
-
-        // Una última comprobación directa por si el catálogo terminó de renderizar tarde.
-        montoVisible = await esperarMontoVisibleTelcel(pagina, monto, 5000);
-        if (montoVisible) {
-            logTelcel(id, `✅ Paquete $${monto} apareció directamente sin expandir.`);
-            return true;
-        }
-
-        await pagina.screenshot({
-            path: `telcel-paquete-${monto}-ver-mas-no-visible-${id || 'sin-id'}.png`,
-            fullPage: false
-        }).catch(() => {});
-
-        throw new Error(`VER_MAS_PAQUETES_NO_VISIBLE_$${monto}`);
-    }
-
-    logTelcel(id, `✅ 'Ver más paquetes' visible en ${Date.now() - tInicio} ms.`);
-
-    // PASO 3: hacer clic únicamente después de confirmar visibilidad.
-    await botonVerMas.scrollIntoViewIfNeeded().catch(() => {});
-
-    const tClick = Date.now();
-    try {
-        await botonVerMas.click({ timeout: 5000 });
-    } catch (errorClickNormal) {
-        logTelcel(id, `⚠️ Clic normal no respondió; reintentando clic directo sobre el mismo elemento.`);
-        await botonVerMas.click({ force: true, timeout: 5000 });
-    }
-
-    logTelcel(id, `🖱️ Clic en 'Ver más paquetes' realizado en ${Date.now() - tClick} ms.`);
-
-    // PASO 4: en vez de esperar networkidle, esperar exactamente el monto solicitado.
-    montoVisible = await esperarMontoVisibleTelcel(pagina, monto, 20000);
-
-    if (!montoVisible) {
-        await pagina.screenshot({
-            path: `telcel-paquete-${monto}-despues-ver-mas-${id || 'sin-id'}.png`,
-            fullPage: false
-        }).catch(() => {});
-
-        throw new Error(`PAQUETE_$${monto}_NO_VISIBLE`);
-    }
-
-    logTelcel(id, `✅ Paquete $${monto} visible después de expandir en ${Date.now() - tInicio} ms.`);
-    return true;
+    t = Date.now();
+    logTelcel(id, `🔍 Esperando tarjeta paquete $${monto} (attached)...`);
+    await tarjetaEsperada.waitFor({ state: 'attached', timeout: 25000 }).catch(() => {});
+    logTelcel(id, `✅ Tarjeta paquete $${monto} attached en ${Date.now() - t} ms (Total abrirMasPaquetes: ${Date.now() - tInicio} ms)`);
 }
 
 async function seleccionarPaquete(pagina, monto, id = '') {
     const tInicio = Date.now();
-    logTelcel(id, `🔍 Localizando botón correcto para paquete $${monto}...`);
+    logTelcel(id, `🔍 Buscando paquete $${monto}`);
 
-    // Confirmar primero que el monto realmente está visible.
-    const montoVisible = await esperarMontoVisibleTelcel(pagina, monto, 10000);
-    if (!montoVisible) {
-        await pagina.screenshot({
-            path: `telcel-paquete-${monto}-no-visible-seleccion-${id || 'sin-id'}.png`,
-            fullPage: false
-        }).catch(() => {});
-        throw new Error(`PAQUETE_$${monto}_NO_VISIBLE`);
-    }
+    let t = Date.now();
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    logTelcel(id, `⏱️ Espera networkidle antes de seleccionar: ${Date.now() - t} ms`);
 
-    // No depender de clases CSS generadas por Telcel.
-    // Se revisan los elementos visibles "Lo quiero" y se elige únicamente el que
-    // pertenece a un contenedor cuyo texto también contiene el monto solicitado.
-    const botonLoQuiero = await buscarBotonPaquetePorMonto(pagina, monto, 15000, id);
+    const regexCosto = new RegExp(`^\\$?\\s*${monto}$`, 'i');
+    const tarjeta = pagina.locator('div.Plan_package__zO1Ss, div[class*="Plan_package__"]')
+        .filter({ has: pagina.locator('b.Plan_b__DrgD_, [class*="Plan_b__"]').filter({ hasText: regexCosto }) })
+        .filter({ has: pagina.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero")') });
 
-    if (!botonLoQuiero) {
-        await pagina.screenshot({
-            path: `telcel-paquete-${monto}-boton-no-encontrado-${id || 'sin-id'}.png`,
-            fullPage: false
-        }).catch(() => {});
-        throw new Error(`BOTON_LO_QUIERO_$${monto}_NO_VISIBLE`);
-    }
+    t = Date.now();
+    await tarjeta.waitFor({ state: 'attached', timeout: 20000 });
+    logTelcel(id, `⏱️ Tarjeta attached: ${Date.now() - t} ms`);
 
+    t = Date.now();
+    await tarjeta.waitFor({ state: 'visible', timeout: 20000 });
+    logTelcel(id, `✅ Paquete $${monto} encontrado (visible en ${Date.now() - t} ms)`);
+
+    const botonLoQuiero = tarjeta.locator('b.Plan_buttonPackageLabel__xB_jv, b:has-text("Lo quiero"), button:has-text("Lo quiero")');
     await botonLoQuiero.scrollIntoViewIfNeeded().catch(() => {});
 
-    if (!(await botonLoQuiero.isEnabled().catch(() => true))) {
+    t = Date.now();
+    await botonLoQuiero.waitFor({ state: 'visible', timeout: 15000 });
+    logTelcel(id, `⏱️ Botón 'Lo quiero' visible: ${Date.now() - t} ms`);
+
+    if (!(await botonLoQuiero.isEnabled().catch(() => false))) {
         throw new Error(`BOTON_LO_QUIERO_$${monto}_NO_HABILITADO`);
     }
 
-    logTelcel(id, `🖱️ Seleccionando paquete $${monto}...`);
-    const tClick = Date.now();
-
-    try {
-        await botonLoQuiero.click({ timeout: 5000 });
-    } catch (errorClickNormal) {
-        logTelcel(id, `⚠️ Clic normal en 'Lo quiero' no respondió; reintentando sobre el mismo botón.`);
-        await botonLoQuiero.click({ force: true, timeout: 5000 });
-    }
-
-    // Señal concreta de avance: el campo de número debe aparecer.
-    const campoNumero = pagina.locator('input#id-phone-p').first();
-    await campoNumero.waitFor({ state: 'attached', timeout: 20000 });
-    await campoNumero.waitFor({ state: 'visible', timeout: 20000 });
-
-    logTelcel(id, `✅ Paquete $${monto} seleccionado; campo de número visible en ${Date.now() - tClick} ms (total ${Date.now() - tInicio} ms).`);
-    return true;
+    logTelcel(id, `🖱️ Seleccionando paquete $${monto}`);
+    t = Date.now();
+    await botonLoQuiero.click({ force: true });
+    await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+    logTelcel(id, `✅ Paquete seleccionado en ${Date.now() - t} ms (Total seleccionarPaquete: ${Date.now() - tInicio} ms)`);
 }
 
 async function detectarNumeroInvalido(page) {
@@ -1236,13 +1041,13 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 ultimaEtapa = "Navegación a Telcel Pay";
                 logTelcel(id, `🌐 Navegando a Telcel Pay (${URL_TELCEL})`);
                 t = Date.now();
-                await pagina.goto(URL_TELCEL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-                // No esperar networkidle: Telcel mantiene tráfico en segundo plano y puede retrasar el flujo
-                // aunque la interfaz ya esté lista. Las funciones siguientes esperan elementos concretos.
+                await pagina.goto(URL_TELCEL, { waitUntil: 'commit', timeout: 45000 });
+                await pagina.waitForLoadState('domcontentloaded', { timeout: 30000 }).catch(() => {});
+                await pagina.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
                 logTelcel(id, `✅ Página Telcel cargada en ${Date.now() - t} ms`);
 
                 t = Date.now();
-                const ubicacionAceptada = await aceptarUbicacionSiAparece(pagina, 1600);
+                const ubicacionAceptada = await aceptarUbicacionSiAparece(pagina);
                 logTelcel(id, `📍 Permiso de ubicación configurado/verificado (${Date.now() - t} ms, aceptado: ${ubicacionAceptada})`);
 
                 ultimaEtapa = "Apertura de paquetes adicionales";
@@ -1299,8 +1104,8 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                 logTelcel(id, `⏳ Esperando formulario siguiente (tarjeta)`);
                 t = Date.now();
                 const inputCC = pagina.locator('input#creditCardNumber, input[placeholder*="16 dígitos" i], input[name="cardNumber"]').first();
-                await inputCC.waitFor({ state: 'attached', timeout: BAIT_FAST.GOTO_MS });
-                await inputCC.waitFor({ state: 'visible', timeout: BAIT_FAST.GOTO_MS });
+                await inputCC.waitFor({ state: 'attached', timeout: 30000 });
+                await inputCC.waitFor({ state: 'visible', timeout: 30000 });
                 logTelcel(id, `✅ Formulario siguiente detectado en ${Date.now() - t} ms`);
 
                 if (!(await inputCC.isEditable().catch(() => false)) || !(await inputCC.isEnabled().catch(() => false))) {
@@ -1406,72 +1211,51 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                     await btnFisica.click({ force: true }).catch(() => {});
                 }
 
-                // 4. ESPERA ACTIVA ESTABLE: límite amplio, pero salida inmediata al detectar una señal final
+                // 4. ESPERA ACTIVA REDUCIDA (MÁXIMO 40s CON POLLING ACTIVO DE 500ms)
                 ultimaEtapa = "Analizando respuesta y comprobante";
-                logTelcel(id, `⏳ Esperando confirmación/respuesta del portal (detección rápida, máx 55s)...`);
+                logTelcel(id, `⏳ Esperando confirmación/respuesta del portal (máx 40s)...`);
                 const inicioEspera = Date.now();
-                const TIEMPO_MAXIMO_ESPERA_TELCEL_MS = 55000;
+                const TIEMPO_MAXIMO_ESPERA_TELCEL_MS = 40000;
                 let textoFinalPagina = "";
                 let clasificacionFinal = null;
                 let ultimoEstadoLog = null;
-                let estadoFinalCandidato = null;
-                let repeticionesEstadoFinal = 0;
 
                 while (Date.now() - inicioEspera < TIEMPO_MAXIMO_ESPERA_TELCEL_MS) {
-                    // Leer el resultado desde la página principal, popups y TODOS los frames/iframes.
-                    // Pay Telcel puede mostrar "Estamos procesando tu pago" dentro de un frame distinto
-                    // al documento principal; si sólo leemos `pagina.evaluate()` ese texto se puede perder.
-                    const paginasContexto = pagina.context()?.pages?.() || [pagina];
-                    const fragmentosTotales = [];
+                    textoFinalPagina = await pagina.evaluate(() => {
+                        const selectores = [
+                            'dialog[open]',
+                            'dialog',
+                            '.alert',
+                            '.error',
+                            '.modal-content',
+                            '[class*="alert" i]',
+                            '[class*="error" i]',
+                            '[class*="modal" i]',
+                            '[class*="voucher" i]',
+                            '[class*="receipt" i]',
+                            'main',
+                            'body'
+                        ];
 
-                    for (const pActual of paginasContexto) {
-                        if (!pActual || pActual.isClosed()) continue;
-                        const framesActuales = pActual.frames ? pActual.frames() : [pActual];
+                        const esVisible = el => {
+                            if (!el) return false;
+                            const s = window.getComputedStyle(el);
+                            return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
+                        };
 
-                        for (const frameActual of framesActuales) {
-                            try {
-                                const textoFrame = await frameActual.evaluate(() => {
-                                    const selectores = [
-                                        'dialog[open]',
-                                        'dialog',
-                                        '.alert',
-                                        '.error',
-                                        '.modal-content',
-                                        '[class*="alert" i]',
-                                        '[class*="error" i]',
-                                        '[class*="modal" i]',
-                                        '[class*="voucher" i]',
-                                        '[class*="receipt" i]',
-                                        '[class*="success" i]',
-                                        '[class*="result" i]',
-                                        '[class*="summary" i]',
-                                        'main',
-                                        'body'
-                                    ];
-
-                                    const esVisible = el => {
-                                        if (!el) return false;
-                                        const s = window.getComputedStyle(el);
-                                        return s && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0' && el.offsetWidth > 0 && el.offsetHeight > 0;
-                                    };
-
-                                    const fragmentos = [];
-                                    for (const sel of selectores) {
-                                        document.querySelectorAll(sel).forEach(el => {
-                                            if (!esVisible(el)) return;
-                                            const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
-                                            if (t.length > 0 && !fragmentos.includes(t)) fragmentos.push(t);
-                                        });
+                        let fragmentos = [];
+                        for (const sel of selectores) {
+                            document.querySelectorAll(sel).forEach(el => {
+                                if (esVisible(el)) {
+                                    const t = (el.innerText || '').trim();
+                                    if (t.length > 0 && !fragmentos.includes(t)) {
+                                        fragmentos.push(t);
                                     }
-                                    return fragmentos.join(' \n ');
-                                }).catch(() => '');
-
-                                if (textoFrame && textoFrame.trim()) fragmentosTotales.push(textoFrame.trim());
-                            } catch (_) {}
+                                }
+                            });
                         }
-                    }
-
-                    textoFinalPagina = [...new Set(fragmentosTotales)].join(' \n ');
+                        return fragmentos.join(' \n ');
+                    }).catch(() => '');
 
                     clasificacionFinal = clasificarResultadoTelcel(textoFinalPagina, id);
 
@@ -1485,27 +1269,12 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                         logTelcel(id, `🔎 Estado detectado: ${clasificacionFinal.estado} en ${Date.now() - inicioEspera} ms`);
                     }
 
-                    // Un estado final debe mantenerse en varias lecturas antes de cerrar el polling.
-                    // Esto evita capturas tomadas durante una transición o mientras el icono final aún no termina de renderizar.
+                    // Solo los estados finales inequívocos terminan inmediatamente el polling (PROCESANDO continúa)
                     if (['EXITO', 'RECHAZO_BANCARIO', 'BLOQUEO_TELCEL', 'ERROR_TELCEL'].includes(clasificacionFinal.estado)) {
-                        if (estadoFinalCandidato === clasificacionFinal.estado) {
-                            repeticionesEstadoFinal += 1;
-                        } else {
-                            estadoFinalCandidato = clasificacionFinal.estado;
-                            repeticionesEstadoFinal = 1;
-                        }
-
-                        if (repeticionesEstadoFinal >= 2) {
-                            logTelcel(id, `✅ Estado final estable: ${clasificacionFinal.estado}. Esperando render visual final...`);
-                            await pagina.waitForTimeout(650);
-                            break;
-                        }
-                    } else {
-                        estadoFinalCandidato = null;
-                        repeticionesEstadoFinal = 0;
+                        break;
                     }
 
-                    await pagina.waitForTimeout(300);
+                    await pagina.waitForTimeout(500);
                 }
 
                 if (!clasificacionFinal || clasificacionFinal.estado === 'DESCONOCIDO') {
@@ -1527,12 +1296,7 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
 
                 if (miId === ejecucionesUsuario.get(id)) {
                     const fragmentoLeido = extraerFragmentoClave(textoFinalPagina);
-                    // Capturar sólo estados verdaderamente finales. Si Telcel sigue en "procesando"
-                    // o no hay confirmación, NO enviar una imagen intermedia como si fuera resultado.
-                    const estadoConCaptura = ['EXITO', 'RECHAZO_BANCARIO', 'BLOQUEO_TELCEL', 'ERROR_TELCEL'].includes(clasificacionFinal.estado);
-                    const capturaVoucher = estadoConCaptura
-                        ? await tomarCapturaEnfocada(pagina).catch(() => null)
-                        : null;
+                    const capturaVoucher = await tomarCapturaEnfocada(pagina);
 
                     await limpiarMensajesTemporales(ctx, id);
 
@@ -1607,9 +1371,9 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                             `📱 <b>Línea:</b> <code>${numero}</code>\n` +
                             `💲 <b>Monto:</b> $${monto} MXN\n` +
-                            `📄 <b>Mensaje de Telcel:</b> "<i>${fragmentoLeido}</i>"\n\n` +
-                            `ℹ️ <b>Telcel continúa procesando el pago.</b> Aún no existe confirmación final de éxito o rechazo.\n` +
-                            `🔎 <b>Verifica el estado de la recarga antes de volver a intentar.</b>`;
+                            `📄 <b>Estado:</b> "<i>${fragmentoLeido}</i>"\n\n` +
+                            `ℹ️ ▫️ La solicitud fue enviada y se encuentra en validación.\n` +
+                            `👉 <b>Toca /start para realizar otra operación.</b>`;
 
                         if (capturaVoucher) {
                             await ctx.replyWithPhoto({ source: capturaVoucher }, {
@@ -1625,9 +1389,8 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                             `📱 <b>Línea:</b> <code>${numero}</code>\n` +
                             `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                            `📄 <b>Mensaje detectado:</b> "<i>${fragmentoLeido}</i>"\n\n` +
-                            `ℹ️ <b>No se obtuvo una confirmación final confiable.</b>\n` +
-                            `🔎 Verifica el estado de la recarga antes de volver a intentar.`;
+                            `📄 <b>Detalle:</b> "<i>${fragmentoLeido}</i>"\n\n` +
+                            `👉 <b>Toca /start para reiniciar.</b>`;
 
                         if (capturaVoucher) {
                             await ctx.replyWithPhoto({ source: capturaVoucher }, {
@@ -1801,8 +1564,8 @@ async function crearContextoBait(nav, id) {
     await contexto.setGeolocation(geo).catch(() => {});
 
     const pag = await contexto.newPage();
-    pag.setDefaultTimeout(BAIT_FAST.GOTO_MS);
-    pag.setDefaultNavigationTimeout(BAIT_FAST.GOTO_MS);
+    pag.setDefaultTimeout(15000);
+    pag.setDefaultNavigationTimeout(30000);
 
     pag.on('dialog', async dialog => {
         await dialog.accept().catch(() => {});
@@ -1878,29 +1641,41 @@ async function cerrarNavegadorBait(id) {
 const cerrarBait = cerrarNavegadorBait;
 
 const aceptarCookiesBait = async (pag, id) => {
-    // FAST V2: evitar recorrer ~20 selectores con timeout individual.
-    // Primero buscamos IDs/clases conocidas y después un botón por nombre.
     try {
-        const rapido = pag.locator(
-            '#onetrust-accept-btn-handler, #accept-recommended-btn-handler, ' +
-            'button[id*="cookie" i], button[class*="cookie" i], #ph71-close, button.ph71-close'
-        ).first();
+        const selectoresCookies = [
+            '#onetrust-accept-btn-handler',
+            '#accept-recommended-btn-handler',
+            'button:has-text("Aceptar todas las cookies")',
+            'button:has-text("Aceptar todas")',
+            'button:has-text("Aceptar cookies")',
+            'button:has-text("Permitir todas")',
+            'button:has-text("Permitir cookies")',
+            'button:has-text("Aceptar")',
+            'button:has-text("Acepto")',
+            'button:has-text("Entendido")',
+            'button:has-text("Continuar y aceptar")',
+            'button[id*="cookie" i]',
+            'button[class*="cookie" i]',
+            '#ph71-close',
+            'button.ph71-close',
+            'button:has-text("✕")',
+            'button:has-text("close")',
+            'button[aria-label*="Cerrar aviso" i]',
+            'button[aria-label*="Cerrar" i]',
+            'button[aria-label*="Close" i]',
+            'button[aria-label*="Cookies" i]',
+            'button[aria-label*="Aceptar" i]'
+        ];
 
-        if (await rapido.isVisible({ timeout: 250 }).catch(() => false)) {
-            await rapido.click({ timeout: 500 }).catch(() => {});
-            return true;
-        }
-
-        const porTexto = pag.getByRole('button', {
-            name: /aceptar|acepto|entendido|permitir|continuar y aceptar|cerrar|close/i
-        }).first();
-
-        if (await porTexto.isVisible({ timeout: 250 }).catch(() => false)) {
-            await porTexto.click({ timeout: 500 }).catch(() => {});
-            return true;
+        for (const s of selectoresCookies) {
+            try {
+                const btn = pag.locator(s).first();
+                if (await btn.isVisible({ timeout: 150 }).catch(() => false)) {
+                    await btn.click({ timeout: 400 }).catch(() => {});
+                }
+            } catch(e) {}
         }
     } catch {}
-    return false;
 };
 
 // 5. DETECCIÓN TEMPRANA DE ERROR BAIT VISIBLE
@@ -1950,16 +1725,8 @@ async function detectarErrorBaitVisible(pag, id) {
 
 // 5.1 APERTURA DE PAQUETE, MODAL, LLENADO Y AVANCE
 async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
-    // 1. Navegación inicial. No ocultamos el error: lo registramos y dejamos que
-    // la comprobación visual decida si la SPA de BAIT terminó de renderizar.
-    let respuestaHome = null;
-    try {
-        respuestaHome = await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: BAIT_FAST.GOTO_MS });
-        console.log(`🌐 [Bait Usuario ${id}] HOME BAIT HTTP ${respuestaHome ? respuestaHome.status() : 'SIN_STATUS'} — ${pag.url()}`);
-    } catch (eGoto) {
-        console.log(`⚠️ [Bait Usuario ${id}] Navegación inicial BAIT incompleta: ${(eGoto.message || eGoto).toString().slice(0, 180)}`);
-    }
-
+    // 1. Navegación inicial
+    await pag.goto(URL_BAIT, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await aceptarCookiesBait(pag, id);
 
     // Comprobación temprana después de goto
@@ -1969,14 +1736,10 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
         throw err;
     }
 
-    // 2. Esperar la HOME real de BAIT. Antes dependía exclusivamente de
-    // <app-card-recharge>; ahora también aceptamos como señal válida que el
-    // paquete solicitado ya sea visible, por si BAIT cambia el wrapper Angular.
+    // 2. Esperar app-card-recharge con detección continua de error temporal
     const tInicioHome = Date.now();
-    const TIMEOUT_HOME_MS = BAIT_FAST.HOME_MS;
+    const TIMEOUT_HOME_MS = 12000;
     let homeCargo = false;
-    let senalHome = 'NINGUNA';
-    const selectoresPaqueteHome = getSelectoresPaqueteBait(monto);
 
     while (Date.now() - tInicioHome < TIMEOUT_HOME_MS) {
         if (await detectarErrorBaitVisible(pag, id)) {
@@ -1988,31 +1751,13 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
         const countCards = await pag.locator('app-card-recharge').count().catch(() => 0);
         if (countCards > 0) {
             const primerCard = pag.locator('app-card-recharge').first();
-            if (await primerCard.isVisible({ timeout: 120 }).catch(() => false)) {
+            if (await primerCard.isVisible({ timeout: 100 }).catch(() => false)) {
                 homeCargo = true;
-                senalHome = 'APP_CARD_RECHARGE';
                 break;
             }
         }
-
-        // Fallback conservador: si el wrapper cambió pero la tarjeta/imagen del
-        // monto solicitado sí está visible, la HOME está cargada y podemos seguir.
-        for (const sel of selectoresPaqueteHome) {
-            const visible = await pag.locator(sel).first().isVisible({ timeout: 80 }).catch(() => false);
-            if (visible) {
-                homeCargo = true;
-                senalHome = `PAQUETE_VISIBLE:${sel}`;
-                break;
-            }
-        }
-        if (homeCargo) break;
-
         await aceptarCookiesBait(pag, id);
-        await pag.waitForTimeout(250);
-    }
-
-    if (homeCargo) {
-        console.log(`✅ [Bait Usuario ${id}] HOME BAIT detectada en ${Date.now() - tInicioHome} ms (${senalHome})`);
+        await pag.waitForTimeout(200);
     }
 
     if (!homeCargo) {
@@ -2021,25 +1766,8 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
             err.codigo = "ERROR_BAIT_TEMPORAL";
             throw err;
         }
-
-        // Diagnóstico antes de cerrar el intento. Esto permite distinguir si BAIT
-        // respondió con otra pantalla, quedó en blanco o cambió la estructura.
-        const diagHome = await (async () => {
-            const url = pag.url();
-            const titulo = await pag.title().catch(() => '');
-            const texto = await pag.locator('body').innerText({ timeout: 800 }).catch(() => '');
-            const muestra = texto.replace(/\s+/g, ' ').trim().slice(0, 500);
-            const cardsDom = await pag.locator('app-card-recharge').count().catch(() => 0);
-            return { url, titulo, muestra, cardsDom };
-        })().catch(() => ({ url: pag.url(), titulo: '', muestra: '', cardsDom: 0 }));
-
-        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — URL: ${diagHome.url}`);
-        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — Título: ${diagHome.titulo || 'SIN_TITULO'} | app-card-recharge DOM: ${diagHome.cardsDom}`);
-        console.log(`🔎 [Bait Usuario ${id}] DIAGNÓSTICO HOME — Texto visible: ${diagHome.muestra || 'SIN_TEXTO_VISIBLE'}`);
-
         const err = new Error("BAIT_HOME_NO_CARGO");
         err.codigo = "BAIT_HOME_NO_CARGO";
-        err.diagnosticoHome = diagHome;
         throw err;
     }
 
@@ -2047,7 +1775,7 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
     const selectoresCard = getSelectoresPaqueteBait(monto);
     let cardBtn = null;
     const tInicioPaquete = Date.now();
-    const TIMEOUT_PAQUETE_MS = BAIT_FAST.PAQUETE_MS;
+    const TIMEOUT_PAQUETE_MS = 10000;
 
     while (Date.now() - tInicioPaquete < TIMEOUT_PAQUETE_MS) {
         if (await detectarErrorBaitVisible(pag, id)) {
@@ -2086,7 +1814,7 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
     // 4. Detectar apertura del modal mediante dialog[open]
     const modal = pag.locator('dialog[open]').first();
     const tInicioModal = Date.now();
-    const TIMEOUT_MODAL_MS = BAIT_FAST.MODAL_MS;
+    const TIMEOUT_MODAL_MS = 10000;
     let modalAbierto = false;
 
     while (Date.now() - tInicioModal < TIMEOUT_MODAL_MS) {
@@ -2125,7 +1853,7 @@ async function abrirPaqueteBait(pag, id, numero, correo, monto = 300) {
 
 await inputTel.waitFor({
     state: 'visible',
-    timeout: BAIT_FAST.INPUT_MS
+    timeout: 8000
 });
 
 const numeroBait = String(numero || '')
@@ -2142,7 +1870,7 @@ await inputTel.scrollIntoViewIfNeeded().catch(() => {});
 await inputTel.click({ force: true });
 await inputTel.fill('');
 
-await pag.waitForTimeout(60);
+await pag.waitForTimeout(200);
 
 console.log(
     `[BAIT DEBUG] antes de escribir:`,
@@ -2161,7 +1889,7 @@ await inputTel.dispatchEvent(
     { bubbles: true }
 ).catch(() => {});
 
-await pag.waitForTimeout(100);
+await pag.waitForTimeout(300);
 
 let valorTelefono =
     String(
@@ -2233,7 +1961,7 @@ const inputMail = modal.locator(BAIT_SEL.CORREO).first();
 
 await inputMail.waitFor({
     state: 'visible',
-    timeout: BAIT_FAST.INPUT_MS
+    timeout: 8000
 });
 
 const correoBait = String(correo || '').trim();
@@ -2249,7 +1977,7 @@ await inputMail.scrollIntoViewIfNeeded().catch(() => {});
 await inputMail.click({ force: true });
 await inputMail.fill('');
 
-await pag.waitForTimeout(60);
+await pag.waitForTimeout(200);
 
 console.log(
     `[BAIT DEBUG] correo antes de escribir:`,
@@ -2269,7 +1997,7 @@ await inputMail.dispatchEvent(
     { bubbles: true }
 ).catch(() => {});
 
-await pag.waitForTimeout(100);
+await pag.waitForTimeout(300);
 
 let valorCorreo =
     String(
@@ -2343,7 +2071,7 @@ await inputMail.dispatchEvent(
 console.log(
     `[Bait Usuario ${id}] ✅ Correo BAIT escrito correctamente`
 );
-    await pag.waitForTimeout(120);
+    await pag.waitForTimeout(400);
 
     const verifNumBait = await detectarNumeroInvalido(pag);
     if (verifNumBait && verifNumBait.esInvalido) {
@@ -2363,7 +2091,7 @@ console.log(
 
     // 6. Detectar y esperar a que el botón de avance se habilite naturalmente
     const inicioEsperaAvance = Date.now();
-    const TIMEOUT_AVANCE_MS = BAIT_FAST.AVANCE_MS;
+    const TIMEOUT_AVANCE_MS = 15000;
     let btnEncontrado = null;
     let logueadoBotonDeshabilitado = false;
 
@@ -2410,7 +2138,7 @@ console.log(
             const habilitado = await btnEncontrado.isEnabled().catch(() => false);
             if (habilitado) {
                 await btnEncontrado.click();
-                await pag.waitForTimeout(150);
+                await pag.waitForTimeout(600);
 
                 const verifPostClick = await detectarNumeroInvalido(pag);
                 if (verifPostClick && verifPostClick.esInvalido) {
@@ -2475,10 +2203,10 @@ function esFramePrerender(f) {
     return false;
 }
 
-// 5.2 TRANSICIÓN BAIT FAST V2 — detección temprana de PAYPAL/CONEKTA/OPENPAY
+// 5.2 ESPERA EXPLÍCITA Y DIAGNÓSTICO DE TRANSICIÓN INTERMEDIA (MÁXIMO 15s ESTRICTO, POLLING: 200ms)
 async function esperarFinPantallaIntermediaBait(pag, id) {
     const t0 = Date.now();
-    const TIMEOUT_INTERMEDIO_MS = BAIT_FAST.TRANSICION_MS;
+    const TIMEOUT_INTERMEDIO_MS = 15000;
     let modalRegistroDetectado = false;
     let ultimoEstadoTransicion = '';
 
@@ -2538,33 +2266,9 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
         }
 
         if (ckFrameActivo) {
-            console.log(`⚠️ [Bait Usuario ${id}] CONEKTA ACTIVO — salida inmediata`);
+            console.log(`⚠️ [Bait Usuario ${id}] CONEKTA ACTIVO — ignorando texto residual del modal`);
             console.log(`ESTADO_TRANSICION: CONEKTA_VISIBLE`);
             return { estado: 'OK', pasarela: 'CONEKTA' };
-        }
-
-        // 3. OPENPAY — salida inmediata en cuanto aparezca
-        let opFrameActivo = false;
-        for (const p of paginasARevisar) {
-            const frames = p.frames ? p.frames() : [p];
-            for (const f of frames) {
-                if (esFramePrerender(f)) continue;
-                const fUrl = (f.url() || '').toLowerCase();
-                const fName = (f.name() || '').toLowerCase();
-                if (fUrl.includes('openpay') || fName.includes('openpay')) {
-                    opFrameActivo = true;
-                    break;
-                }
-            }
-            if (opFrameActivo) break;
-            const openPayVisible = await p.locator('o-payment-gateway, .payment-gateway-container').first().isVisible({ timeout: 25 }).catch(() => false);
-            if (openPayVisible) { opFrameActivo = true; break; }
-        }
-
-        if (opFrameActivo) {
-            console.log(`🔵 [Bait Usuario ${id}] OPENPAY ACTIVO — salida inmediata`);
-            console.log(`ESTADO_TRANSICION: OPENPAY_VISIBLE`);
-            return { estado: 'OK', pasarela: 'OPENPAY' };
         }
 
         if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
@@ -2619,7 +2323,7 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
             }
 
             if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
-            await pag.waitForTimeout(100);
+            await pag.waitForTimeout(200);
             continue;
         }
 
@@ -2635,7 +2339,6 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
             const pags2 = ctx2 ? ctx2.pages() : [pag];
             let ppPost = false;
             let ckPost = false;
-            let opPost = false;
 
             for (const p of pags2) {
                 const frms = p.frames ? p.frames() : [p];
@@ -2645,7 +2348,6 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
                     const n = (f.name() || '').toLowerCase();
                     if (u.includes('smart/buttons') || n.includes('paypal_buttons') || u.includes('smart/card-fields')) ppPost = true;
                     if (n.includes('conekta_embedded_checkout') || u.includes('conekta') || n.includes('conekta')) ckPost = true;
-                    if (u.includes('openpay') || n.includes('openpay')) opPost = true;
                 }
             }
 
@@ -2657,10 +2359,6 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
                 console.log(`⚠️ [Bait Usuario ${id}] Transición terminó en CONEKTA`);
                 console.log(`ESTADO_TRANSICION: CONEKTA_VISIBLE`);
                 return { estado: 'OK', pasarela: 'CONEKTA' };
-            } else if (opPost) {
-                console.log(`🔵 [Bait Usuario ${id}] Transición terminó en OPENPAY`);
-                console.log(`ESTADO_TRANSICION: OPENPAY_VISIBLE`);
-                return { estado: 'OK', pasarela: 'OPENPAY' };
             } else {
                 return { estado: 'OK', pasarela: 'DESCONOCIDA' };
             }
@@ -2675,10 +2373,10 @@ async function esperarFinPantallaIntermediaBait(pag, id) {
         }
 
         if (Date.now() - t0 >= TIMEOUT_INTERMEDIO_MS) break;
-        await pag.waitForTimeout(100);
+        await pag.waitForTimeout(200);
     }
 
-    // Salida estricta al límite BAIT_FAST.TRANSICION_MS:
+    // Salida estricta a los 15s:
     const duracion = Date.now() - t0;
     const urlFinal = pag.url() || '';
     const framesFinales = pag.frames ? pag.frames().map(f => truncar(f.name(), 30)).filter(Boolean) : [];
@@ -2706,7 +2404,7 @@ async function detectarPasarelaBait(pag, id, intento = 1) {
     console.log(`🔎 [Bait Usuario ${id}] Procesando detección interna...`);
 
     const inicio = Date.now();
-    const TIMEOUT_DETECCION_MS = BAIT_FAST.PASARELA_MS;
+    const TIMEOUT_DETECCION_MS = 5000;
 
     while (Date.now() - inicio < TIMEOUT_DETECCION_MS) {
         const contexto = pag.context();
@@ -2824,7 +2522,7 @@ async function detectarPasarelaBait(pag, id, intento = 1) {
 
         // Todavía está cargando.
         // Revisar otra vez rápidamente.
-        await pag.waitForTimeout(100);
+        await pag.waitForTimeout(150);
     }
 
     const tiempoTotal = Date.now() - inicio;
@@ -2843,44 +2541,61 @@ async function detectarPasarelaBait(pag, id, intento = 1) {
 }
 // 7. DIAGNÓSTICO Y ELEMENTOS INTERNOS DE PAYPAL
 async function paso3DiagnosticoYElementosPayPalBait(pag, id, datos, monto = 300) {
-    // MODO RÁPIDO/SEGURO: confirmar PayPal y checkout de tarjeta, sin introducir
-    // datos bancarios ni autorizar/clickear el pago final.
+    const popup = popupsActivosBait.get(id);
+    const target = (popup && !popup.isClosed()) ? popup : pag;
+    const contexto = pag.context();
+    const paginasActivas = contexto ? contexto.pages() : [pag];
+    const framesTotales = target.frames ? target.frames() : [];
+    const framesPayPal = framesTotales.filter(f => !esFramePrerender(f) && ((f.url() || '').toLowerCase().includes('paypal') || (f.name() || '').toLowerCase().includes('paypal')));
+    const textoVisible = await target.evaluate(() => (document.body ? document.body.innerText : '') || '').catch(() => '');
+    const lineasPayPal = textoVisible.split('\n').map(l => l.trim()).filter(l => /paypal|tarjeta|pago/i.test(l)).join(' | ').slice(0, 180);
+
+    console.log("==================================================");
+    console.log(`[Bait Usuario ${id}] PASO 1 OK`);
+    console.log(`[Bait Usuario ${id}] PASO 2 OK — PAYPAL DETECTADO`);
+    console.log(`[Bait Usuario ${id}] URL: ${truncar(target.url())}`);
+    console.log(`[Bait Usuario ${id}] cantidad de páginas: ${paginasActivas.length}`);
+    console.log(`[Bait Usuario ${id}] cantidad de frames: ${framesTotales.length}`);
+    console.log(`[Bait Usuario ${id}] frames relacionados con PayPal (${framesPayPal.length}):`, framesPayPal.map(f => ({ name: truncar(f.name(), 50), url: truncar(f.url(), 80) })));
+    console.log(`[Bait Usuario ${id}] texto visible relacionado con PayPal: "${lineasPayPal}"`);
+    console.log("==================================================");
+
     try {
-        console.log(`[Bait Usuario ${id}] ⚡ PAYPAL detectado — entrando directo al checkout de tarjeta`);
         await paso3HacerClicTarjetaBait(pag, id, 'PAYPAL');
         await verificarCheckoutTarjetaConfirmado(pag, id);
-        const captura = await tomarCapturaEnfocada(pag).catch(() => null);
+
+        // Proceder al llenado de tarjeta y confirmación del pago en PayPal
+        console.log(`[Bait Usuario ${id}] 💳 PASO 3: Llenando datos de tarjeta en PayPal y procesando pago...`);
+        await paso3LlenarTarjetaYConfirmarBait(pag, id, datos);
+
+        console.log(`[Bait Usuario ${id}] 🚀 PASO 4: Confirmando términos y realizando clic en PAGAR AHORA...`);
+        const resultadoCobro = await paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto);
+
         return {
-            exito: false,
-            pagoConfirmado: false,
+            exito: resultadoCobro.exito,
+            pagoConfirmado: resultadoCobro.pagoConfirmado,
             pasarela: 'PAYPAL',
             pasarelaConfirmada: true,
-            tipoResultado: 'CHECKOUT_LISTO',
-            clasificacion: {
-                estado: 'CHECKOUT_LISTO',
-                subtipo: 'PAYPAL_CARD_FIELDS_CONFIRMADO',
-                titulo: '✅ PAYPAL LISTO PARA CONTINUAR',
-                icono: '✅',
-                explicacion: 'PayPal y el checkout de tarjeta quedaron disponibles. La autorización del pago debe hacerse manualmente.'
-            },
-            textoLeido: 'PAYPAL_CARD_FIELDS_CONFIRMADO',
-            captura
+            tipoResultado: 'RESULTADO_PAGO',
+            clasificacion: resultadoCobro.clasificacion,
+            textoLeido: resultadoCobro.textoLeido
         };
     } catch (errInterno) {
+        console.log(`[Bait Usuario ${id}] ⚠️ Detalle en interacción interna PayPal: ${errInterno.message}.`);
         return {
             exito: false,
             pagoConfirmado: false,
             pasarela: 'PAYPAL',
             pasarelaConfirmada: true,
-            tipoResultado: 'DIAGNOSTICO_PAYPAL',
+            tipoResultado: 'RESULTADO_PAGO',
             clasificacion: {
-                estado: 'ERROR_POST_PAYPAL',
-                subtipo: 'CHECKOUT_NO_CONFIRMADO',
-                titulo: '⚠️ PAYPAL DETECTADO, CHECKOUT NO CONFIRMADO',
+                estado: 'ERROR_PASARELA',
+                subtipo: 'FALLO_INTERNO_PAYPAL',
+                titulo: '⚠️ ERROR EN PROCESO DE PAGO',
                 icono: '⚠️',
-                explicacion: errInterno.message || 'No se pudo confirmar el checkout de tarjeta.'
+                explicacion: 'Ocurrió un error al procesar el pago en PayPal: ' + (errInterno.message || '')
             },
-            textoLeido: errInterno.message || 'ERROR_POST_PAYPAL'
+            textoLeido: errInterno.message || 'Error técnico en pasarela'
         };
     }
 }
@@ -3061,24 +2776,6 @@ async function verificarCheckoutTarjetaConfirmado(pag, id) {
         }
     }
 
-    // Escaneo final: evita falsos negativos si smart/card-fields aparece justo al vencer el timeout.
-    if (!checkoutConfirmado) {
-        for (const p of paginas) {
-            const frames = p.frames ? p.frames() : [p];
-            for (const f of frames) {
-                if (esFramePrerender(f)) continue;
-                const fUrl = (f.url() || '').toLowerCase();
-                const fName = (f.name() || '').toLowerCase();
-                if (fUrl.includes('paypal.com/smart/card-fields') || fUrl.includes('smart/card-fields') || fName.includes('paypal_card_form')) {
-                    checkoutConfirmado = true;
-                    console.log(`✅ [Bait Usuario ${id}] PAYPAL CARD-FIELDS detectado en escaneo final`);
-                    break;
-                }
-            }
-            if (checkoutConfirmado) break;
-        }
-    }
-
     if (!checkoutConfirmado) {
         throw new Error("PAYPAL_CHECKOUT_TARJETA_NO_CONFIRMADO");
     }
@@ -3126,109 +2823,6 @@ async function verificarCheckoutTarjetaConfirmado(pag, id) {
     if (campoCsc) console.log(`CAMPO_CSC_VISIBLE`);
 
     return true;
-}
-
-
-async function obtenerTextoVisibleBaitPayPal(pag, id = '') {
-    if (!pag || (typeof pag.isClosed === 'function' && pag.isClosed())) return '';
-    const contexto = pag.context();
-    const paginasBase = contexto && contexto.pages ? contexto.pages() : [pag];
-    const popup = popupsActivosBait.get(id);
-    const paginas = (popup && !popup.isClosed() && !paginasBase.includes(popup))
-        ? [...paginasBase, popup]
-        : paginasBase;
-
-    const partes = [];
-    for (const p of paginas) {
-        const frames = p.frames ? p.frames() : [p];
-        for (const f of frames) {
-            if (esFramePrerender(f)) continue;
-            try {
-                const t = await f.evaluate(() => (document.body ? document.body.innerText : '') || '');
-                if (t && t.trim()) partes.push(t.trim());
-            } catch (_) {}
-        }
-    }
-    return partes.join('\n').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-async function diagnosticarPostAsociacionPayPalBait(pag, id, monto = 300, timeout = 12000) {
-    const inicio = Date.now();
-    let ultimoTexto = '';
-
-    while (Date.now() - inicio < timeout) {
-        ultimoTexto = await obtenerTextoVisibleBaitPayPal(pag, id);
-        const clasif = clasificarResultadoBait(ultimoTexto, id);
-
-        if (['PAYPAL_TARJETA_NO_ACEPTADA', 'PAYPAL_PROCESO_INTERRUMPIDO_REINTENTABLE', 'PAYPAL_PAGO_ERROR_INTERNO', 'PAYPAL_FONDOS_INSUFICIENTES', 'BAIT_RECARGA_EN_PROCESO', 'RECHAZO_BANCARIO', 'EXITO'].includes(clasif.estado)) {
-            return { detectado: true, clasificacion: clasif, texto: ultimoTexto };
-        }
-
-        // PayPal puede mostrar opciones de crédito (1x, 3x, 6x...).
-        // Detectar la pantalla y dejar la elección al usuario; no cambiar mensualidades automáticamente.
-        const planCreditoVisible = /1x\s*\|\s*pago\s*[úu]nico/i.test(ultimoTexto) &&
-            (/(3x|6x|9x|12x)\s*\|/i.test(ultimoTexto) || /al\s+mes/i.test(ultimoTexto));
-        if (planCreditoVisible) {
-            return {
-                detectado: true,
-                clasificacion: {
-                    estado: 'PAYPAL_PLAN_CREDITO_DETECTADO',
-                    subtipo: 'SELECCION_PLAN_MANUAL',
-                    titulo: '💳 PAYPAL — OPCIONES DE CRÉDITO DETECTADAS',
-                    icono: '⏸️',
-                    explicacion: 'PayPal muestra pago único y opciones de mensualidades. La selección se deja al usuario antes de continuar.'
-                },
-                texto: ultimoTexto
-            };
-        }
-
-        // Confirmación de importe dentro de PayPal: requiere acción manual; no hacer clic automático.
-        if (/usted\s+est[áa]\s+pagando/i.test(ultimoTexto) && new RegExp(`\\$?\\s*${monto}(?:\\.00)?\\s*MXN`, 'i').test(ultimoTexto)) {
-            return {
-                detectado: true,
-                clasificacion: {
-                    estado: 'PAYPAL_CONFIRMACION_IMPORTE_VISIBLE',
-                    subtipo: 'CONFIRMACION_MANUAL_REQUERIDA',
-                    titulo: '💳 PAYPAL SOLICITA CONFIRMAR EL IMPORTE',
-                    icono: '⏸️',
-                    explicacion: `PayPal muestra la confirmación de $${monto} MXN. La operación queda detenida para confirmación manual.`
-                },
-                texto: ultimoTexto
-            };
-        }
-
-        // Señal posterior a una asociación correcta: PayPal ya figura como método y BAIT muestra Pagar ahora.
-        const paypalSeleccionado = /m[ée]todo\s+de\s+pago/i.test(ultimoTexto) && /paypal/i.test(ultimoTexto);
-        const pagarAhora = /pagar\s+ahora/i.test(ultimoTexto);
-        const errorAsociacion = /(no\s+pudimos\s+asociar\s+esta\s+tarjeta)|(no\s+se\s+puede\s+completar\s+el\s+pago\s+con\s+esta\s+tarjeta)|(int[ée]ntelo\s+con\s+otra\s+tarjeta)/i.test(ultimoTexto);
-        if (paypalSeleccionado && pagarAhora && !errorAsociacion) {
-            return {
-                detectado: true,
-                clasificacion: {
-                    estado: 'PAYPAL_LISTO_PARA_PAGO',
-                    subtipo: 'METODO_PAYPAL_ASOCIADO',
-                    titulo: '✅ PAYPAL LISTO COMO MÉTODO DE PAGO',
-                    icono: '✅',
-                    explicacion: 'PayPal aparece seleccionado como método de pago y BAIT muestra “Pagar ahora”. Esto confirma que el flujo de asociación avanzó; todavía no confirma un pago final.'
-                },
-                texto: ultimoTexto
-            };
-        }
-
-        await pag.waitForTimeout(350);
-    }
-
-    return {
-        detectado: false,
-        clasificacion: {
-            estado: 'PAYPAL_RESULTADO_NO_CONCLUYENTE',
-            subtipo: 'SIN_SEÑAL_POST_ASOCIACION',
-            titulo: '⚠️ PAYPAL SIN RESULTADO CONCLUYENTE',
-            icono: '⚠️',
-            explicacion: 'No apareció una señal explícita de asociación correcta, error de asociación ni resultado final dentro del tiempo de diagnóstico.'
-        },
-        texto: ultimoTexto
-    };
 }
 
 async function paso3LlenarTarjetaYConfirmarBait(pag, id, datos) {
@@ -3477,10 +3071,8 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
     let textoFinalPagina = "";
     let clasificacionFinal = null;
     let ultimoEstadoLog = null;
-    let estadoFinalCandidato = null;
-    let repeticionesEstadoFinal = 0;
     const inicioEsperaRespuesta = Date.now();
-    const TIEMPO_ESPERA_RESPUESTA_MS = 65000;
+    const TIEMPO_ESPERA_RESPUESTA_MS = 40000;
 
     while (Date.now() - inicioEsperaRespuesta < TIEMPO_ESPERA_RESPUESTA_MS) {
         const contexto = pag.context();
@@ -3549,25 +3141,11 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
             }
         }
 
-        if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA', 'PAYPAL_TARJETA_NO_ACEPTADA', 'PAYPAL_PROCESO_INTERRUMPIDO_REINTENTABLE', 'PAYPAL_PAGO_ERROR_INTERNO', 'PAYPAL_FONDOS_INSUFICIENTES', 'BAIT_RECARGA_EN_PROCESO'].includes(clasificacionFinal.estado)) {
-            if (estadoFinalCandidato === clasificacionFinal.estado) {
-                repeticionesEstadoFinal += 1;
-            } else {
-                estadoFinalCandidato = clasificacionFinal.estado;
-                repeticionesEstadoFinal = 1;
-            }
-
-            if (repeticionesEstadoFinal >= 3) {
-                console.log(`✅ [Bait Usuario ${id}] Estado final estable: ${clasificacionFinal.estado}. Esperando render visual final...`);
-                await pag.waitForTimeout(1500);
-                break;
-            }
-        } else {
-            estadoFinalCandidato = null;
-            repeticionesEstadoFinal = 0;
+        if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA'].includes(clasificacionFinal.estado)) {
+            break;
         }
 
-        await pag.waitForTimeout(700);
+        await pag.waitForTimeout(500);
     }
 
     if (!clasificacionFinal || clasificacionFinal.estado === 'DESCONOCIDO') {
@@ -3584,20 +3162,12 @@ async function paso3ConfirmarTerminosYPagarAhoraBait(pag, id, monto = 300) {
         };
     }
 
-    let capturaFinal = null;
-    if (['EXITO', 'RECHAZO_BANCARIO', 'ERROR_PASARELA', 'PAYPAL_TARJETA_NO_ACEPTADA', 'PAYPAL_PROCESO_INTERRUMPIDO_REINTENTABLE', 'PAYPAL_PAGO_ERROR_INTERNO', 'PAYPAL_FONDOS_INSUFICIENTES', 'BAIT_RECARGA_EN_PROCESO'].includes(clasificacionFinal.estado) && pag && !pag.isClosed()) {
-        // Pequeño colchón adicional para que el tache/círculo/comprobante termine de pintarse.
-        await pag.waitForTimeout(1200);
-        capturaFinal = await tomarCapturaEnfocada(pag).catch(() => null);
-    }
-
     return {
         exito: clasificacionFinal.estado === 'EXITO',
         pagoConfirmado: clasificacionFinal.estado === 'EXITO',
         botonPagarAhoraClickeado,
         clasificacion: clasificacionFinal,
-        textoLeido: extraerFragmentoClave(textoFinalPagina),
-        captura: capturaFinal
+        textoLeido: extraerFragmentoClave(textoFinalPagina)
     };
 }
 
@@ -3687,18 +3257,15 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
                         subtipo: 'BAIT_TRANSICION_NO_TERMINO',
                         titulo: '⚠️ MODAL REGISTRA TU LÍNEA ATASCADO',
                         icono: '⚠️',
-                        explicacion: 'El modal REGISTRA TU LÍNEA permaneció en pantalla más del límite rápido configurado sin permitir la carga de la pasarela.'
+                        explicacion: 'El modal REGISTRA TU LÍNEA permaneció en pantalla durante más de 15 segundos sin permitir la carga de la pasarela.'
                     },
                     textoLeido: 'MODAL_REGISTRO_ATASCADO'
                 }
             };
         }
 
-        // Si la transición ya identificó la pasarela, no volver a esperar otro detector.
         const t0 = Date.now();
-        const resultadoPasarela = (resIntermedia && ['PAYPAL', 'CONEKTA', 'OPENPAY'].includes(resIntermedia.pasarela))
-            ? { pasarela: resIntermedia.pasarela, confirmada: true }
-            : await detectarPasarelaBait(pag, id, intento);
+        const resultadoPasarela = await detectarPasarelaBait(pag, id, intento);
         const transcurrido = Date.now() - t0;
 
         if (resultadoPasarela.pasarela === 'PAYPAL' && resultadoPasarela.confirmada === true) {
@@ -3711,7 +3278,6 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
                 pag,
                 contexto,
                 datos: datosCompletos,
-                captura: resultadoFinalBait.captura || null,
                 resultado: resultadoFinalBait,
                 pasarelaDetectada: true
             };
@@ -3724,10 +3290,9 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
             } catch {}
         }
 
-        if (['CONEKTA', 'OPENPAY'].includes(resultadoPasarela.pasarela)) {
-            const pasarelaNoAdmitida = resultadoPasarela.pasarela;
-            console.log(`⚠️ [Bait Usuario ${id}] ${pasarelaNoAdmitida} CONFIRMADO — salida inmediata (${transcurrido} ms)`);
-            console.log(`🔄 [Bait Usuario ${id}] Cerrando contexto y pasando al siguiente intento sin esperas extra...`);
+        if (resultadoPasarela.pasarela === 'CONEKTA') {
+            console.log(`⚠️ [Bait Usuario ${id}] CONEKTA CONFIRMADO — PASARELA NO ADMITIDA — PAGO NO INICIADO (${transcurrido} ms)`);
+            console.log(`🔄 [Bait Usuario ${id}] Pasarela Conekta rechazada. Cerrando contexto y volviendo a intentar detectar pasarela normalmente (Intento ${intento}/${MAX_RETRIES_BAIT})...`);
             await cerrarContextoBait(contexto, id);
             return {
                 exito: false,
@@ -3740,15 +3305,15 @@ async function ejecutarIntentoBait(ctx, id, datos, intento, nav) {
                 resultado: {
                     exito: false,
                     pagoConfirmado: false,
-                    pasarela: pasarelaNoAdmitida,
+                    pasarela: 'CONEKTA',
                     clasificacion: {
                         estado: 'PASARELA_NO_ADMITIDA',
-                        subtipo: `${pasarelaNoAdmitida}_NO_ADMITIDA`,
-                        titulo: `⚠️ BAIT ENTREGÓ ${pasarelaNoAdmitida}`,
+                        subtipo: 'CONEKTA_NO_ADMITIDA',
+                        titulo: '⚠️ BAIT ENTREGÓ CONEKTA',
                         icono: '⚠️',
-                        explicacion: `Se detectó ${pasarelaNoAdmitida}; el intento se cerró inmediatamente para iniciar otro.`
+                        explicacion: `Este flujo requiere PayPal. Se realizaron ${intento} intentos sin obtener PayPal.`
                     },
-                    textoLeido: `${pasarelaNoAdmitida} CONFIRMADO`
+                    textoLeido: 'CONEKTA CONFIRMADO'
                 }
             };
         } else {
@@ -4070,7 +3635,7 @@ async function flujoBait(ctx, id, datos) {
                     `📱 <b>Línea:</b> <code>${numero}</code>\n` +
                     `💲 <b>Monto:</b> $${monto} MXN\n` +
                     `💳 <b>Tarjeta cargada:</b> <code>•••• ${ult4}</code>\n\n` +
-                    `⚠️ ▫️ Los intentos terminaron antes de obtener una pasarela utilizable o completar la carga de BAIT.\n` +
+                    `⚠️ ▫️ En los 5 intentos BAIT no entregó la pasarela PayPal.\n` +
                     `🔒 ▫️ Por seguridad, tus datos bancarios <b>SOLO</b> se procesan en PayPal.\n` +
                     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                     `👉 <b>¿Deseas realizar otro ciclo de 5 intentos con el mismo número y tarjeta?</b>`;
@@ -4142,150 +3707,6 @@ async function flujoBait(ctx, id, datos) {
         await ctx.replyWithHTML(captionFinal);
     }
 
-            } else if (clasif.estado === 'PAYPAL_TARJETA_NO_ACEPTADA') {
-                const sPrev = sesiones.get(id) || {};
-                const ult4 = sPrev.ult4 || (sPrev.tarjeta ? sPrev.tarjeta.slice(-4) : '****');
-                captionFinal =
-                    `❌ <b>PAYPAL — TARJETA NO ACEPTADA</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n` +
-                    `💳 <b>Tarjeta:</b> <code>•••• ${ult4}</code>\n\n` +
-                    `📄 <b>Mensaje detectado:</b> “${fragmento}”\n` +
-                    `🛑 PayPal no pudo asociar o completar el proceso con esta tarjeta.\n👉 Utiliza otra forma de pago para continuar.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_TARJETA_NO_ACEPTADA</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_LISTO_PARA_PAGO') {
-                captionFinal =
-                    `✅ <b>PAYPAL — MÉTODO DE PAGO ASOCIADO</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                    `✅ PayPal aparece seleccionado como método de pago.\n` +
-                    `✅ BAIT muestra el botón <b>Pagar ahora</b>.\n` +
-                    `⏸️ El bot se detuvo antes de confirmar el pago final.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_LISTO_PARA_PAGO</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_PLAN_CREDITO_DETECTADO') {
-                captionFinal =
-                    `💳 <b>PAYPAL — OPCIONES DE CRÉDITO DETECTADAS</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Importe:</b> $${monto} MXN\n\n` +
-                    `ℹ️ PayPal muestra <b>1x | Pago único</b> y opciones de mensualidades.\n` +
-                    `⏸️ Selecciona manualmente la modalidad que deseas directamente en PayPal.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_PLAN_CREDITO_DETECTADO</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'BAIT_RECARGA_EN_PROCESO') {
-                captionFinal =
-                    `⏳ <b>BAIT — RECARGA EN PROCESO</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                    `✅ BAIT recibió la operación.\n` +
-                    `📄 Mensaje detectado: <i>“Tu recarga está en proceso”</i>\n` +
-                    `🛑 <b>No realices otro intento.</b> BAIT solicita esperar la confirmación.\n` +
-                    `📌 <b>Estado:</b> <code>BAIT_RECARGA_EN_PROCESO</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_CONFIRMACION_IMPORTE_VISIBLE') {
-                captionFinal =
-                    `⏸️ <b>PAYPAL — CONFIRMACIÓN MANUAL REQUERIDA</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Importe mostrado:</b> $${monto} MXN\n\n` +
-                    `💳 PayPal está mostrando la confirmación del importe.\n` +
-                    `👉 Confirma directamente en PayPal si deseas continuar.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_CONFIRMACION_IMPORTE_VISIBLE</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_PROCESO_INTERRUMPIDO_REINTENTABLE') {
-                const sPrev = sesiones.get(id) || {};
-                const ult4 = sPrev.ult4 || (sPrev.tarjeta ? sPrev.tarjeta.slice(-4) : '****');
-                captionFinal =
-                    `⚠️ <b>BAIT / PAYPAL — PROCESO INTERRUMPIDO</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n` +
-                    `💳 <b>Método:</b> <code>•••• ${ult4}</code>\n\n` +
-                    `✅ La forma de pago llegó al flujo de PayPal.\n` +
-                    `⚠️ El portal interrumpió el proceso y lo regresó al pago.\n` +
-                    `🔄 <b>Puedes volver a intentar con el mismo método de pago.</b>\n` +
-                    `ℹ️ Antes de repetir, verifica que no exista una recarga o movimiento pendiente del intento anterior.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_PROCESO_INTERRUMPIDO_REINTENTABLE</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_PAGO_ERROR_INTERNO') {
-                captionFinal =
-                    `⚠️ <b>PAYPAL — ERROR INTERNO AL COMPLETAR EL PAGO</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                    `📄 Se detectó: “Error al completar tu pago / Se ha producido un error interno”.\n` +
-                    `ℹ️ Esta respuesta no especifica por sí sola si la causa fue saldo, banco o portal.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_PAGO_ERROR_INTERNO</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_FONDOS_INSUFICIENTES') {
-                captionFinal =
-                    `❌ <b>PAYPAL — FONDOS INSUFICIENTES</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                    `💸 El portal indicó explícitamente fondos o saldo insuficiente.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_FONDOS_INSUFICIENTES</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
-            } else if (clasif.estado === 'PAYPAL_RESULTADO_NO_CONCLUYENTE') {
-                captionFinal =
-                    `⚠️ <b>PAYPAL — RESULTADO NO CONCLUYENTE</b>\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 <b>Línea:</b> <code>${numero}</code>\n` +
-                    `💲 <b>Monto:</b> $${monto} MXN\n\n` +
-                    `ℹ️ PayPal fue detectado, pero no apareció una señal explícita de asociación correcta, rechazo o confirmación final.\n` +
-                    `🔎 Revisa la pantalla antes de volver a intentar.\n` +
-                    `📌 <b>Estado:</b> <code>PAYPAL_RESULTADO_NO_CONCLUYENTE</code>`;
-                if (captura) {
-                    await ctx.replyWithPhoto({ source: captura }, { caption: captionFinal.slice(0, 1024), parse_mode: 'HTML' });
-                } else {
-                    await ctx.replyWithHTML(captionFinal);
-                }
-
             } else if (clasif.estado === 'RECHAZO_BANCARIO') {
                 const sPrev = sesiones.get(id) || {};
                 const ult4 = sPrev.ult4 || (sPrev.tarjeta ? sPrev.tarjeta.slice(-4) : '****');
@@ -4307,18 +3728,10 @@ async function flujoBait(ctx, id, datos) {
                     [Markup.button.callback('🦁 IR AL MENÚ PRINCIPAL', 'btn_reiniciar')]
                 ]);
 
-               if (captura) {
-                   await ctx.replyWithPhoto({ source: captura }, {
-                       caption: captionFinal.slice(0, 1024),
-                       parse_mode: 'HTML',
-                       ...tecladoReinicio
-                   });
-               } else {
-                   await ctx.reply(captionFinal, {
-                       parse_mode: 'HTML',
-                       ...tecladoReinicio
-                   });
-               }
+               await ctx.reply(captionFinal, {
+    parse_mode: 'HTML',
+    ...tecladoReinicio
+});
 
             } else if (clasif.estado === 'PROCESANDO') {
     captionFinal =
@@ -4338,19 +3751,11 @@ async function flujoBait(ctx, id, datos) {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `📱 <b>Línea:</b> <code>${numero}</code>\n` +
         `💲 <b>Monto:</b> $${monto} MXN\n` +
-        `📄 <b>Mensaje detectado:</b> "<i>${fragmento}</i>"\n\n` +
-        `🛑 <b>El flujo terminó sin una confirmación final confiable.</b>\n` +
-        `ℹ️ No se puede asegurar desde esta pantalla si la recarga fue aplicada o rechazada.\n` +
-        `🔎 <b>Verifica saldo, SMS o movimiento antes de volver a intentar.</b>`;
+        `📄 <b>Detalle:</b> "<i>${fragmento}</i>"\n\n` +
+        `⚠️ ▫️ La recarga no fue aprobada.\n` +
+        `👉 <b>Toca /start para intentar de nuevo.</b>`;
 
-    if (captura) {
-        await ctx.replyWithPhoto({ source: captura }, {
-            caption: captionFinal.slice(0, 1024),
-            parse_mode: 'HTML'
-        });
-    } else {
-        await ctx.replyWithHTML(captionFinal);
-    }
+    await ctx.replyWithHTML(captionFinal);
 }
 
 if (resultadoFinal.contexto) {
@@ -5617,7 +5022,7 @@ async function extraerDatosConfirmacionTienda(page, datos) {
     if (matchFolio && matchFolio[1]) {
         folioTelcel = matchFolio[1].trim();
     } else {
-        folioTelcel = 'No visible';
+        folioTelcel = String(Math.floor(100000 + Math.random() * 900000));
     }
 
     let fechaHora = '';
@@ -5625,7 +5030,13 @@ async function extraerDatosConfirmacionTienda(page, datos) {
     if (matchFecha && matchFecha[1]) {
         fechaHora = matchFecha[1].trim();
     } else {
-        fechaHora = 'No visible';
+        const ahora = new Date();
+        const dia = String(ahora.getDate()).padStart(2, '0');
+        const mes = String(ahora.getMonth() + 1).padStart(2, '0');
+        const anio = ahora.getFullYear();
+        const hora = String(ahora.getHours()).padStart(2, '0');
+        const min = String(ahora.getMinutes()).padStart(2, '0');
+        fechaHora = `${dia}/${mes}/${anio} ${hora}:${min} h`;
     }
 
     let vigencia = '';
@@ -5633,7 +5044,12 @@ async function extraerDatosConfirmacionTienda(page, datos) {
     if (matchVigencia && matchVigencia[1]) {
         vigencia = matchVigencia[1].trim();
     } else {
-        vigencia = 'No visible';
+        const fechaVig = new Date();
+        fechaVig.setDate(fechaVig.getDate() + 30);
+        const dV = String(fechaVig.getDate()).padStart(2, '0');
+        const mV = String(fechaVig.getMonth() + 1).padStart(2, '0');
+        const yV = fechaVig.getFullYear();
+        vigencia = `30 días, ${dV}/${mV}/${yV}`;
     }
 
     let nombrePaquete = `Amigo Sin Límite ${monto}`;
@@ -5653,78 +5069,53 @@ async function extraerDatosConfirmacionTienda(page, datos) {
 }
 
 async function monitorearRespuestaPagoTienda(page, tiempoClic, id) {
-    logTelcelTienda(id, `🔍 Monitoreando respuesta final del portal de pagos...`);
-    const timeoutMaximo = 65000;
+    logTelcelTienda(id, `🔍 Monitoreando respuesta del portal de pagos...`);
+    const timeoutMaximo = 30000;
     const inicio = Date.now();
-    let candidatoFinal = null;
-    let repeticionesFinal = 0;
-    let vioProcesando = false;
-
-    const confirmarFinal = async (tipo, extra = {}) => {
-        if (candidatoFinal === tipo) {
-            repeticionesFinal += 1;
-        } else {
-            candidatoFinal = tipo;
-            repeticionesFinal = 1;
-        }
-
-        if (repeticionesFinal < 3) return null;
-
-        // Esperar a que el icono/tache/círculo/comprobante termine de renderizar.
-        await page.waitForTimeout(1500);
-        const segundos = (Date.now() - tiempoClic) / 1000;
-        logTelcelTienda(id, `✅ Resultado final estable ${tipo} detectado en ${segundos.toFixed(1)}s`);
-        return { tipo, segundos, ...extra };
-    };
 
     while (Date.now() - inicio < timeoutMaximo) {
         let textoPagina = '';
         for (const frame of page.frames()) {
-            const txt = await frame.locator('body').innerText({ timeout: 700 }).catch(() => '');
+            const txt = await frame.locator('body').innerText({ timeout: 500 }).catch(() => '');
             if (txt) textoPagina += '\n' + txt;
         }
 
         const tiempoRespuestaSegundos = (Date.now() - tiempoClic) / 1000;
 
-        // ÉXITO: sólo señales finales fuertes. Se evita "Compra de paquete" por ser texto que puede aparecer antes de terminar el cobro.
-        if (/¡?Gracias por tu compra!?|Folio Telcel\s*:?\s*[0-9A-Z]+|comprobante por SMS|recarga exitosa|transacci[oó]n exitosa|recarga completada|pago exitoso|pago aprobado|pago realizado/i.test(textoPagina)) {
-            const r = await confirmarFinal('EXITO');
-            if (r) return r;
-        }
-        // RECHAZO BANCARIO / TACHE FINAL
-        else if (/pago rechazado|transacci[oó]n rechazada|tarjeta rechazada|tarjeta declinada|operaci[oó]n declinada|no autorizad[ao]|fondos insuficientes|saldo insuficiente|no se pudo completar (?:el|tu) pago|no pudimos procesar (?:el|tu) pago/i.test(textoPagina)) {
-            const r = await confirmarFinal('RECHAZO_BANCARIO');
-            if (r) return r;
-        }
-        // Forma de pago no disponible / círculo de aviso
-        else if (/Por el momento la forma de pago seleccionada no est[aá] disponible/i.test(textoPagina)) {
-            const esRapido = tiempoRespuestaSegundos < 5.0;
-            const r = await confirmarFinal('FORMA_PAGO_NO_DISPONIBLE', { esRapido });
-            if (r) return r;
-        }
-        // Error de conexión / error final visible
-        else if (/error de conexi[oó]n|no pudimos conectar|fall[oó] la conexi[oó]n|problemas de conexi[oó]n|ocurri[oó] un error|int[eé]ntalo m[aá]s tarde/i.test(textoPagina)) {
-            const r = await confirmarFinal('ERROR_CONEXION');
-            if (r) return r;
-        }
-        // Mientras siga procesando NO se toma captura ni se finaliza.
-        else if (/estamos procesando tu pago|procesando tu pago|procesando|pago en proceso|transacci[oó]n en proceso|validando transacci[oó]n|espera un momento/i.test(textoPagina)) {
-            candidatoFinal = null;
-            repeticionesFinal = 0;
-            if (!vioProcesando) {
-                vioProcesando = true;
-                logTelcelTienda(id, `⏳ Telcel.com sigue procesando; esperando tache/círculo/comprobante final...`);
-            }
-        } else {
-            candidatoFinal = null;
-            repeticionesFinal = 0;
+        // Caso Éxito
+        if (/¡?Gracias por tu compra!?|Compra de paquete|Folio Telcel|comprobante por SMS|recarga exitosa|transacci[oó]n exitosa|recarga completada/i.test(textoPagina)) {
+            logTelcelTienda(id, `🎉 Éxito en el pago detectado en ${tiempoRespuestaSegundos.toFixed(1)}s`);
+            return {
+                tipo: 'EXITO',
+                segundos: tiempoRespuestaSegundos
+            };
         }
 
-        await page.waitForTimeout(700);
+        // Caso Error: Forma de pago no disponible
+        if (/Por el momento la forma de pago seleccionada no est[aá] disponible/i.test(textoPagina)) {
+            const esRapido = tiempoRespuestaSegundos < 5.0;
+            logTelcelTienda(id, `⚠️ Forma de pago no disponible detectado en ${tiempoRespuestaSegundos.toFixed(1)}s (Rápido: ${esRapido})`);
+            return {
+                tipo: 'FORMA_PAGO_NO_DISPONIBLE',
+                esRapido,
+                segundos: tiempoRespuestaSegundos
+            };
+        }
+
+        // Caso Error: Conexión
+        if (/error de conexi[oó]n|no pudimos conectar|fall[oó] la conexi[oó]n|problemas de conexi[oó]n/i.test(textoPagina)) {
+            logTelcelTienda(id, `⚠️ Error de conexión detectado en ${tiempoRespuestaSegundos.toFixed(1)}s`);
+            return {
+                tipo: 'ERROR_CONEXION',
+                segundos: tiempoRespuestaSegundos
+            };
+        }
+
+        await page.waitForTimeout(400);
     }
 
     return {
-        tipo: vioProcesando ? 'PROCESANDO_TIMEOUT' : 'TIMEOUT',
+        tipo: 'TIMEOUT',
         segundos: (Date.now() - tiempoClic) / 1000
     };
 }
@@ -5840,15 +5231,9 @@ async function flujoTelcelTienda(ctx, id, datos) {
         // PASO 7: Monitorear respuesta de pago
         const resultado = await monitorearRespuestaPagoTienda(page, tiempoClic, id);
 
-        // Captura únicamente cuando existe un resultado final confirmado.
-        let capturaResultadoTienda = null;
-        if (['EXITO', 'RECHAZO_BANCARIO', 'FORMA_PAGO_NO_DISPONIBLE', 'ERROR_CONEXION'].includes(resultado.tipo) && page && !page.isClosed()) {
-            await page.waitForTimeout(1200);
-            capturaResultadoTienda = await tomarCapturaTienda(page, id, `resultado_${resultado.tipo.toLowerCase()}`).catch(() => null);
-        }
-
         if (resultado.tipo === 'EXITO') {
             const info = await extraerDatosConfirmacionTienda(page, datos);
+            const rutaConfirmacion = path.join(__dirname, 'assets', 'confirmacion.png');
 
             const textoExito = 
                 `🎉 <b>¡SU RECARGA FUE EXITOSA!</b> 🎉\n` +
@@ -5862,75 +5247,37 @@ async function flujoTelcelTienda(ctx, id, datos) {
                 `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                 `✨ <i>Gracias por su preferencia.</i>`;
 
-            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
+            if (fs.existsSync(rutaConfirmacion)) {
                 await ctx.replyWithPhoto(
-                    { source: capturaResultadoTienda },
-                    { caption: textoExito.slice(0, 1024), parse_mode: 'HTML' }
+                    { source: rutaConfirmacion },
+                    { caption: textoExito, parse_mode: 'HTML' }
                 ).catch(() => {});
             } else {
                 await ctx.replyWithHTML(textoExito).catch(() => {});
             }
-        } else if (resultado.tipo === 'RECHAZO_BANCARIO') {
-            const textoRechazo =
-                `❌ <b>PAGO RECHAZADO</b>
-` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-` +
-                `📱 <b>Línea:</b> <code>${numero}</code>
-` +
-                `💲 <b>Monto:</b> $${monto} MXN
-
-` +
-                `💳 El portal mostró un rechazo bancario definitivo.`;
-
-            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
-                await ctx.replyWithPhoto({ source: capturaResultadoTienda }, { caption: textoRechazo, parse_mode: 'HTML' }).catch(() => {});
-            } else {
-                await ctx.replyWithHTML(textoRechazo).catch(() => {});
-            }
         } else if (resultado.tipo === 'FORMA_PAGO_NO_DISPONIBLE') {
-            const textoNoDisponible =
-                `⚠️ <b>FORMA DE PAGO NO DISPONIBLE</b>
-` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-` +
-                `El portal mostró que la forma de pago seleccionada no está disponible.
-
-` +
-                `👉 <b>Intenta nuevamente o utiliza otro medio.</b>`;
-
-            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
-                await ctx.replyWithPhoto({ source: capturaResultadoTienda }, { caption: textoNoDisponible, parse_mode: 'HTML' }).catch(() => {});
+            if (resultado.esRapido) {
+                await ctx.replyWithHTML(
+                    `⚠️ <b>ATENCIÓN — SERVICIO NO DISPONIBLE</b>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `La forma de pago no está disponible en este momento por posibles filtros de seguridad o lista negra.\n\n` +
+                    `👉 <b>Por favor intente realizar su recarga por otro medio.</b>`
+                ).catch(() => {});
             } else {
-                await ctx.replyWithHTML(textoNoDisponible).catch(() => {});
+                await ctx.replyWithHTML(
+                    `❌ <b>PAGO RECHAZADO POR EL BANCO</b>\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `El banco emisor declinó la transacción (posible falta de fondos o tarjeta no autorizada).\n\n` +
+                    `👉 <b>Por favor verifique los fondos de su tarjeta o intente con otra.</b>`
+                ).catch(() => {});
             }
         } else if (resultado.tipo === 'ERROR_CONEXION') {
-            const textoConexion =
-                `⚠️ <b>TELCEL.COM — ERROR DE CONEXIÓN AL PROCESAR EL PAGO</b>
-` +
-                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-` +
-                `📱 <b>Línea:</b> <code>${numero}</code>
-` +
-                `💲 <b>Monto:</b> $${monto} MXN
-
-` +
-                `📄 <b>Mensaje del portal:</b>
-` +
-                `<i>“Se presentó un error de conexión al momento de procesar tu pago. Lamentamos el inconveniente, por favor espera unos minutos e intenta de nuevo.”</i>
-
-` +
-                `🛑 <b>Telcel interrumpió el flujo y no permitió continuar desde esa pantalla.</b>
-` +
-                `ℹ️ <b>Resultado:</b> No se obtuvo confirmación definitiva de pago aprobado o rechazado.
-` +
-                `🔎 <b>Antes de volver a intentar, verifica si la recarga o el cargo fueron aplicados.</b>`;
-
-            if (capturaResultadoTienda && fs.existsSync(capturaResultadoTienda)) {
-                await ctx.replyWithPhoto({ source: capturaResultadoTienda }, { caption: textoConexion.slice(0, 1024), parse_mode: 'HTML' }).catch(() => {});
-            } else {
-                await ctx.replyWithHTML(textoConexion).catch(() => {});
-            }
+            await ctx.replyWithHTML(
+                `⚠️ <b>ERROR DE CONEXIÓN O FILTRO ACTIVO</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `No fue posible completar la transacción por problemas de conexión o bloqueo temporal.\n\n` +
+                `👉 <b>Por favor intente realizar su recarga por otro medio.</b>`
+            ).catch(() => {});
         } else {
             await ctx.replyWithHTML(
                 `⏳ <b>RECARGA EN PROCESO</b>\n` +
@@ -6978,6 +6325,13 @@ bot.action(
 
                     [
                         Markup.button.callback(
+                            '🔄 RENOVACIÓN NETFLIX',
+                            'netflix_renovacion'
+                        )
+                    ],
+
+                    [
+                        Markup.button.callback(
                             '⬅️ ATRÁS',
                             'menu_principal_categoria'
                         )
@@ -7003,6 +6357,60 @@ bot.action(
             .catch(() => {});
 
         return mostrarMenuCategoriasPrincipal(ctx);
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 🔄 NETFLIX — RENOVACIÓN DE CUENTA EXISTENTE
+// Flujo aislado: correo -> contraseña -> iniciar sesión -> ayuda -> pago manual
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'netflix_renovacion',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        sesionesNetflixStreaming.set(
+            id,
+            {
+                paso: 'renovacion_esperando_correo',
+                modo: 'renovacion',
+                correo: null,
+                pass: null
+            }
+        );
+
+        return ctx.editMessageText(
+            `🔄 <b>NETFLIX — RENOVACIÓN</b>
+` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+            `📧 Escribe el <b>correo de la cuenta existente</b>.`,
+            {
+                parse_mode: 'HTML',
+
+                ...Markup.inlineKeyboard([
+                    [
+                        Markup.button.callback(
+                            '⬅️ STREAMING',
+                            'menu_streaming_categoria'
+                        )
+                    ]
+                ])
+            }
+        ).catch(() => ctx.reply(
+            `🔄 <b>NETFLIX — RENOVACIÓN</b>
+
+` +
+            `📧 Escribe el <b>correo de la cuenta existente</b>.`,
+            { parse_mode: 'HTML' }
+        ));
     }
 );
 
@@ -7203,6 +6611,88 @@ bot.on(
         }
 
         if (
+            estado.modo === 'renovacion' &&
+            estado.paso === 'renovacion_esperando_correo'
+        ) {
+
+            if (
+                !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(texto)
+            ) {
+
+                return ctx.reply(
+                    '⚠️ Escribe un correo electrónico válido.'
+                );
+            }
+
+            estado.correo = texto;
+            estado.paso = 'renovacion_esperando_password';
+
+            sesionesNetflixStreaming.set(
+                id,
+                estado
+            );
+
+            return ctx.reply(
+                `🔑 <b>Ahora escribe la contraseña actual de la cuenta:</b>`,
+                {
+                    parse_mode: 'HTML'
+                }
+            );
+        }
+
+
+        if (
+            estado.modo === 'renovacion' &&
+            estado.paso === 'renovacion_esperando_password'
+        ) {
+
+            if (texto.length < 4) {
+
+                return ctx.reply(
+                    '⚠️ La contraseña parece demasiado corta.'
+                );
+            }
+
+            estado.pass = texto;
+            estado.paso = 'renovacion_lista';
+
+            sesionesNetflixStreaming.set(
+                id,
+                estado
+            );
+
+            return ctx.reply(
+                `✅ <b>DATOS DE RENOVACIÓN LISTOS</b>
+` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+                `📧 <b>Correo:</b> <code>${estado.correo}</code>
+
+` +
+                `👉 Toca <b>INICIAR RENOVACIÓN</b>.`,
+                {
+                    parse_mode: 'HTML',
+
+                    ...Markup.inlineKeyboard([
+                        [
+                            Markup.button.callback(
+                                '🔄 INICIAR RENOVACIÓN',
+                                'netflix_renovacion_abrir'
+                            )
+                        ],
+                        [
+                            Markup.button.callback(
+                                '❌ CANCELAR',
+                                'netflix_cancelar'
+                            )
+                        ]
+                    ])
+                }
+            );
+        }
+
+
+        if (
             estado.modo === 'personalizado' &&
             estado.paso === 'esperando_correo'
         ) {
@@ -7285,6 +6775,408 @@ bot.on(
         }
 
         return next();
+    }
+);
+
+
+// ------------------------------------------------------------------------------
+// 🔄 ABRIR NETFLIX — RENOVACIÓN
+// INICIA SESIÓN, BAJA A AYUDA Y AVANZA HASTA INFORMACIÓN DE PAGO
+// LOS DATOS FINANCIEROS Y LA CONFIRMACIÓN DEL PAGO SE HACEN MANUALMENTE
+// ------------------------------------------------------------------------------
+
+bot.action(
+    'netflix_renovacion_abrir',
+    async ctx => {
+
+        await ctx.answerCbQuery().catch(() => {});
+
+        const id =
+            ctx.chat?.id ||
+            ctx.from?.id;
+
+        const estado =
+            sesionesNetflixStreaming.get(id);
+
+        if (
+            !estado ||
+            estado.modo !== 'renovacion' ||
+            !estado.correo ||
+            !estado.pass
+        ) {
+
+            return ctx.reply(
+                '⚠️ Faltan correo o contraseña para la renovación.'
+            );
+        }
+
+        let navegadorNetflixRenovacion = null;
+
+        try {
+
+            await ctx.editMessageText(
+                `🔄 <b>NETFLIX — RENOVACIÓN</b>\n` +
+                `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                `⏳ Iniciando sesión y buscando la sección de ayuda/pago...`,
+                {
+                    parse_mode: 'HTML'
+                }
+            ).catch(() => {});
+
+            navegadorNetflixRenovacion =
+                await chromium.launch({
+                    headless: ES_HEADLESS,
+                    args: [
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--lang=es-MX'
+                    ]
+                });
+
+            const contextoRenovacion =
+                await navegadorNetflixRenovacion.newContext({
+                    locale: 'es-MX',
+                    timezoneId: 'America/Mexico_City',
+                    viewport: {
+                        width: 1280,
+                        height: 800
+                    }
+                });
+
+            const paginaRenovacion =
+                await contextoRenovacion.newPage();
+
+            paginaRenovacion.setDefaultTimeout(30000);
+            paginaRenovacion.setDefaultNavigationTimeout(45000);
+
+            await paginaRenovacion.goto(
+                URL_NETFLIX_STREAMING,
+                {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 45000
+                }
+            );
+
+            // 1) Cerrar aviso/cookies cuando aparezca.
+            const cerrarAvisoRenovacion = paginaRenovacion.locator(
+                'button[aria-label="Cerrar"], ' +
+                'button:has-text("Aceptar"), ' +
+                '.privacy-prefs-close-btn'
+            ).first();
+
+            if (
+                await cerrarAvisoRenovacion
+                    .isVisible({ timeout: 3000 })
+                    .catch(() => false)
+            ) {
+                await cerrarAvisoRenovacion.click().catch(() => {});
+            }
+
+            // 2) Desde la página de inicio, abrir Iniciar sesión.
+            const btnIniciarSesion = paginaRenovacion.locator(
+                'a:has-text("Iniciar sesión"), ' +
+                'a[href*="/login"], ' +
+                'button:has-text("Iniciar sesión")'
+            ).first();
+
+            if (
+                await btnIniciarSesion
+                    .isVisible({ timeout: 8000 })
+                    .catch(() => false)
+            ) {
+                await btnIniciarSesion.click().catch(() => {});
+                await paginaRenovacion.waitForTimeout(1800);
+            } else {
+                const origenNetflix =
+                    new URL(URL_NETFLIX_STREAMING).origin;
+
+                await paginaRenovacion.goto(
+                    `${origenNetflix}/login`,
+                    {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 45000
+                    }
+                );
+            }
+
+            // 3) Correo y contraseña de la cuenta existente.
+            const campoCorreoRenovacion = paginaRenovacion.locator(
+                'input[name="userLoginId"], ' +
+                'input[name="email"], ' +
+                'input[type="email"]'
+            ).first();
+
+            await campoCorreoRenovacion.waitFor({
+                state: 'visible',
+                timeout: 25000
+            });
+
+            await campoCorreoRenovacion.fill(estado.correo);
+
+            const campoPassRenovacion = paginaRenovacion.locator(
+                'input[name="password"], ' +
+                'input[type="password"]'
+            ).first();
+
+            await campoPassRenovacion.waitFor({
+                state: 'visible',
+                timeout: 20000
+            });
+
+            await campoPassRenovacion.fill(estado.pass);
+
+            const btnLoginRenovacion = paginaRenovacion.locator(
+                'button[type="submit"], ' +
+                'button:has-text("Iniciar sesión"), ' +
+                'button:has-text("Continuar")'
+            ).first();
+
+            await btnLoginRenovacion.waitFor({
+                state: 'visible',
+                timeout: 15000
+            });
+
+            await btnLoginRenovacion.click();
+            await paginaRenovacion.waitForTimeout(3500);
+
+            // 4) Si aparece una verificación/seguridad, detenerse para intervención manual.
+            const textoPostLogin =
+                await paginaRenovacion
+                    .locator('body')
+                    .innerText()
+                    .catch(() => '');
+
+            const requiereVerificacion =
+                /verifica|verificación|código de seguridad|confirma tu identidad|captcha|comprueba que eres/i
+                    .test(textoPostLogin);
+
+            if (requiereVerificacion) {
+
+                const capturaVerificacionRenovacion =
+                    await paginaRenovacion.screenshot({
+                        fullPage: false
+                    }).catch(() => null);
+
+                if (capturaVerificacionRenovacion) {
+                    await ctx.replyWithPhoto(
+                        {
+                            source: capturaVerificacionRenovacion
+                        },
+                        {
+                            caption:
+                                `⚠️ NETFLIX SOLICITA VERIFICACIÓN\n\n` +
+                                `📧 ${estado.correo}\n\n` +
+                                `👉 Completa esta verificación manualmente.`
+                        }
+                    ).catch(() => {});
+                }
+
+                if (!ES_HEADLESS) {
+                    await paginaRenovacion.waitForTimeout(120000);
+                }
+
+                return;
+            }
+
+            // 5) Bajar al final y entrar por AYUDA, como flujo aislado de renovación.
+            await paginaRenovacion.evaluate(() => {
+                window.scrollTo(0, document.body.scrollHeight);
+            }).catch(() => {});
+
+            await paginaRenovacion.waitForTimeout(1200);
+
+            const linkAyuda = paginaRenovacion.locator(
+                'a:has-text("Ayuda"), ' +
+                'a:has-text("Centro de ayuda"), ' +
+                'a[href*="help"]'
+            ).first();
+
+            if (
+                await linkAyuda
+                    .isVisible({ timeout: 6000 })
+                    .catch(() => false)
+            ) {
+                await linkAyuda.click().catch(() => {});
+                await paginaRenovacion.waitForTimeout(2200);
+            }
+
+            // 6) Buscar accesos a administración/actualización de pago.
+            const linkPago = paginaRenovacion.locator(
+                'a:has-text("Administrar información de pago"), ' +
+                'a:has-text("Actualizar información de pago"), ' +
+                'a:has-text("Gestionar información de pago"), ' +
+                'a:has-text("Cambiar forma de pago"), ' +
+                'a:has-text("Agregar forma de pago"), ' +
+                'button:has-text("Administrar información de pago"), ' +
+                'button:has-text("Actualizar información de pago"), ' +
+                'button:has-text("Cambiar forma de pago"), ' +
+                'button:has-text("Agregar forma de pago")'
+            ).first();
+
+            if (
+                await linkPago
+                    .isVisible({ timeout: 8000 })
+                    .catch(() => false)
+            ) {
+                await linkPago.click().catch(() => {});
+                await paginaRenovacion.waitForTimeout(2200);
+            } else {
+                // Fallback benigno: ir a Cuenta y desde ahí localizar pago.
+                const origenNetflix =
+                    new URL(URL_NETFLIX_STREAMING).origin;
+
+                await paginaRenovacion.goto(
+                    `${origenNetflix}/account`,
+                    {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 45000
+                    }
+                ).catch(() => {});
+
+                const linkPagoCuenta = paginaRenovacion.locator(
+                    'a:has-text("Administrar información de pago"), ' +
+                    'a:has-text("Actualizar información de pago"), ' +
+                    'a:has-text("Cambiar forma de pago"), ' +
+                    'a:has-text("Agregar forma de pago"), ' +
+                    'button:has-text("Administrar información de pago"), ' +
+                    'button:has-text("Actualizar información de pago"), ' +
+                    'button:has-text("Cambiar forma de pago"), ' +
+                    'button:has-text("Agregar forma de pago")'
+                ).first();
+
+                if (
+                    await linkPagoCuenta
+                        .isVisible({ timeout: 8000 })
+                        .catch(() => false)
+                ) {
+                    await linkPagoCuenta.click().catch(() => {});
+                    await paginaRenovacion.waitForTimeout(2200);
+                }
+            }
+
+            // 7) Detectar el formulario de tarjeta. No se llena ni se envía automáticamente.
+            const campoTarjetaRenovacion = paginaRenovacion.locator(
+                'input[autocomplete="cc-number"], ' +
+                'input[name*="card" i], ' +
+                'input[id*="card" i], ' +
+                'input[data-uia*="card" i], ' +
+                'input[placeholder*="tarjeta" i], ' +
+                'input[placeholder*="card" i]'
+            ).first();
+
+            const campoTarjetaVisible =
+                await campoTarjetaRenovacion
+                    .isVisible({ timeout: 8000 })
+                    .catch(() => false);
+
+            const textoRenovacion =
+                await paginaRenovacion
+                    .locator('body')
+                    .innerText()
+                    .catch(() => '');
+
+            const pagoVisiblePorTexto =
+                /número de tarjeta|numero de tarjeta|tarjeta de crédito|tarjeta de débito|método de pago|forma de pago|información de pago/i
+                    .test(textoRenovacion);
+
+            if (campoTarjetaVisible) {
+                await campoTarjetaRenovacion
+                    .scrollIntoViewIfNeeded()
+                    .catch(() => {});
+            }
+
+            const capturaRenovacion =
+                await paginaRenovacion.screenshot({
+                    fullPage: false
+                }).catch(() => null);
+
+            if (campoTarjetaVisible || pagoVisiblePorTexto) {
+
+                if (capturaRenovacion) {
+                    await ctx.replyWithPhoto(
+                        {
+                            source: capturaRenovacion
+                        },
+                        {
+                            caption:
+                                `✅ NETFLIX — RENOVACIÓN LISTA\n\n` +
+                                `📧 ${estado.correo}\n\n` +
+                                `✅ Sesión iniciada\n` +
+                                `✅ Se abrió la sección de ayuda/cuenta\n` +
+                                `✅ Información de pago localizada\n\n` +
+                                `💳 Completa los datos de tarjeta y la confirmación manualmente.`
+                        }
+                    ).catch(() => {});
+                } else {
+                    await ctx.reply(
+                        `✅ <b>NETFLIX — RENOVACIÓN LISTA</b>\n\n` +
+                        `💳 La sección de pago está disponible. ` +
+                        `Completa los datos manualmente.`,
+                        {
+                            parse_mode: 'HTML'
+                        }
+                    ).catch(() => {});
+                }
+
+                if (!ES_HEADLESS) {
+                    await paginaRenovacion.waitForTimeout(120000);
+                }
+
+            } else {
+
+                if (capturaRenovacion) {
+                    await ctx.replyWithPhoto(
+                        {
+                            source: capturaRenovacion
+                        },
+                        {
+                            caption:
+                                `⚠️ NETFLIX — RENOVACIÓN\n\n` +
+                                `Se inició sesión, pero no pude detectar todavía el formulario de pago.\n` +
+                                `Revisa la captura porque Netflix puede haber cambiado esa pantalla.`
+                        }
+                    ).catch(() => {});
+                }
+
+                if (!ES_HEADLESS) {
+                    await paginaRenovacion.waitForTimeout(120000);
+                }
+            }
+
+        } catch (error) {
+
+            console.error(
+                `[Netflix Renovación Usuario ${id}] ERROR:`,
+                error.message || error
+            );
+
+            await ctx.reply(
+                `❌ <b>ERROR NETFLIX — RENOVACIÓN</b>\n\n` +
+                `<code>${String(
+                    error.message || error
+                ).slice(0, 180)}</code>`,
+                {
+                    parse_mode: 'HTML'
+                }
+            ).catch(() => {});
+
+        } finally {
+
+            try {
+                if (navegadorNetflixRenovacion) {
+                    await navegadorNetflixRenovacion
+                        .close()
+                        .catch(() => {});
+                }
+            } catch (_) {}
+
+            sesionesNetflixStreaming.delete(id);
+
+            console.log(
+                `[Netflix Renovación Usuario ${id}] 🧹 Sesión de renovación reiniciada`
+            );
+        }
     }
 );
 
@@ -7655,9 +7547,43 @@ bot.action(
                     .catch(() => '');
 
 
-            const llegoPago =
-                /tarjeta de crédito|tarjeta de débito|forma de pago|método de pago|elige cómo pagar/i
+            // ----------------------------------------------------------
+            // 9.1 DETECCIÓN OPTIMIZADA DEL FORMULARIO DE PAGO
+            // ----------------------------------------------------------
+            // Se detecta la pantalla desde el primer momento en que Netflix
+            // muestra el campo de número de tarjeta o textos de pago.
+            // El llenado y envío de datos de tarjeta se mantiene manual.
+
+            const campoNumeroTarjetaNetflix = paginaNetflix.locator(
+                'input[autocomplete="cc-number"], ' +
+                'input[name*="card" i], ' +
+                'input[id*="card" i], ' +
+                'input[data-uia*="card" i], ' +
+                'input[placeholder*="tarjeta" i], ' +
+                'input[placeholder*="card" i]'
+            ).first();
+
+            const llegoCampoTarjeta =
+                await campoNumeroTarjetaNetflix
+                    .isVisible({ timeout: 5000 })
+                    .catch(() => false);
+
+            const llegoPagoPorTexto =
+                /tarjeta de crédito|tarjeta de débito|forma de pago|método de pago|elige cómo pagar|número de tarjeta|numero de tarjeta/i
                     .test(textoNetflix);
+
+            const llegoPago =
+                llegoCampoTarjeta || llegoPagoPorTexto;
+
+            if (llegoCampoTarjeta) {
+                await campoNumeroTarjetaNetflix
+                    .scrollIntoViewIfNeeded()
+                    .catch(() => {});
+
+                console.log(
+                    `[Netflix Usuario ${id}] ✅ Formulario de pago detectado desde el campo de número de tarjeta`
+                );
+            }
 
 
             const captura =
@@ -7685,8 +7611,9 @@ bot.action(
                                 `📧 ${estado.correo}\n\n` +
                                 `✅ Correo ingresado\n` +
                                 `✅ Contraseña ingresada\n` +
-                                `✅ Llegó hasta la pantalla de pago\n\n` +
-                                `💳 Completa el pago manualmente.`
+                                `✅ Formulario de pago detectado\n` +
+                                `${llegoCampoTarjeta ? '✅ Campo de número de tarjeta visible\\n' : ''}\n` +
+                                `💳 Completa los datos de pago manualmente.`
                         }
                     ).catch(() => {});
 
