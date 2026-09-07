@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: bot-telcel-proxy-1
+    env: node
+    buildCommand: PLAYWRIGHT_BROWSERS_PATH=0 npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium
+    startCommand: node index.js
+    envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
+      - key: USE_LOCAL_CHROMIUM
+        value: "true"

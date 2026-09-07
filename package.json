@@ -1,0 +1,20 @@
+{
+  "name": "telegram-playwright-uber-flow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Flujo auditado de Telegraf + Playwright con dos pestañas",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "check": "node --check index.js",
+    "postinstall": "playwright install chromium"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "playwright": "^1.62.1",
+    "telegraf": "^4.16.3"
+  }
+}
