@@ -218,6 +218,143 @@ const ejecucionesUsuario = new Map();
 const mensajesTemporales = new Map();
 const historialErroresUsuario = new Map();
 
+
+// ==============================================================================
+// 🧠 CONTROL DE MEMORIA / CONCURRENCIA DE CHROMIUM (RENDER)
+// ==============================================================================
+// En Render un Chromium local puede consumir mucha RAM. Para evitar reinicios por OOM,
+// limitamos CUÁNTOS navegadores Chromium locales pueden existir a la vez.
+// Puedes subir el límite con MAX_BROWSER_CONCURRENCY=2 cuando confirmes que tu plan tiene RAM suficiente.
+const MAX_BROWSER_CONCURRENCY = Math.max(
+    1,
+    parseInt(process.env.MAX_BROWSER_CONCURRENCY || (process.env.RENDER === 'true' ? '1' : '2'), 10) || 1
+);
+const MEMORY_SOFT_LIMIT_MB = Math.max(0, parseInt(process.env.MEMORY_SOFT_LIMIT_MB || '0', 10) || 0);
+let chromiumLocalesEnUso = 0;
+const colaChromiumLocal = [];
+const browsersConSlot = new WeakSet();
+const browsersSlotLiberado = new WeakSet();
+
+function memoriaProcesoMB() {
+    const m = process.memoryUsage();
+    return {
+        rss: Math.round(m.rss / 1024 / 1024),
+        heapUsed: Math.round(m.heapUsed / 1024 / 1024),
+        external: Math.round(m.external / 1024 / 1024)
+    };
+}
+
+function drenarColaChromiumLocal() {
+    while (chromiumLocalesEnUso < MAX_BROWSER_CONCURRENCY && colaChromiumLocal.length > 0) {
+        const siguiente = colaChromiumLocal.shift();
+        chromiumLocalesEnUso++;
+        siguiente.resolve();
+    }
+}
+
+async function adquirirSlotChromiumLocal(etiqueta = 'flujo') {
+    const mem = memoriaProcesoMB();
+    if (MEMORY_SOFT_LIMIT_MB > 0 && mem.rss >= MEMORY_SOFT_LIMIT_MB) {
+        console.warn(`[MEMORIA] ⚠️ RSS=${mem.rss}MB >= límite suave ${MEMORY_SOFT_LIMIT_MB}MB. Esperando antes de abrir Chromium (${etiqueta}).`);
+    }
+
+    if (chromiumLocalesEnUso < MAX_BROWSER_CONCURRENCY && !(MEMORY_SOFT_LIMIT_MB > 0 && mem.rss >= MEMORY_SOFT_LIMIT_MB)) {
+        chromiumLocalesEnUso++;
+        console.log(`[MEMORIA] 🎟️ Slot Chromium concedido (${chromiumLocalesEnUso}/${MAX_BROWSER_CONCURRENCY}) — ${etiqueta}`);
+        return;
+    }
+
+    console.log(`[MEMORIA] ⏳ Chromium en cola — ${etiqueta} | activos=${chromiumLocalesEnUso}/${MAX_BROWSER_CONCURRENCY}`);
+    await new Promise(resolve => colaChromiumLocal.push({ resolve, etiqueta, ts: Date.now() }));
+    console.log(`[MEMORIA] 🎟️ Slot Chromium concedido desde cola (${chromiumLocalesEnUso}/${MAX_BROWSER_CONCURRENCY}) — ${etiqueta}`);
+}
+
+function liberarSlotChromiumLocal(browser, etiqueta = 'flujo') {
+    if (!browser || !browsersConSlot.has(browser) || browsersSlotLiberado.has(browser)) return;
+    browsersSlotLiberado.add(browser);
+    chromiumLocalesEnUso = Math.max(0, chromiumLocalesEnUso - 1);
+    const mem = memoriaProcesoMB();
+    console.log(`[MEMORIA] 🧹 Slot Chromium liberado (${chromiumLocalesEnUso}/${MAX_BROWSER_CONCURRENCY}) — ${etiqueta} | RSS=${mem.rss}MB`);
+    drenarColaChromiumLocal();
+}
+
+async function lanzarChromiumLocalControlado(opciones, etiqueta = 'flujo') {
+    await adquirirSlotChromiumLocal(etiqueta);
+    let browser = null;
+    try {
+        browser = await chromium.launch(opciones);
+        browsersConSlot.add(browser);
+        if (typeof browser.on === 'function') {
+            browser.on('disconnected', () => liberarSlotChromiumLocal(browser, etiqueta));
+        }
+        return browser;
+    } catch (error) {
+        // Si launch falla no habrá evento disconnected: devolvemos el slot aquí.
+        chromiumLocalesEnUso = Math.max(0, chromiumLocalesEnUso - 1);
+        drenarColaChromiumLocal();
+        throw error;
+    }
+}
+
+// Log liviano para distinguir fuga gradual vs pico por concurrencia.
+setInterval(() => {
+    const m = memoriaProcesoMB();
+    console.log(`[MEMORIA] RSS=${m.rss}MB HEAP=${m.heapUsed}MB EXT=${m.external}MB | ChromiumLocal=${chromiumLocalesEnUso}/${MAX_BROWSER_CONCURRENCY} | cola=${colaChromiumLocal.length}`);
+    if (MEMORY_SOFT_LIMIT_MB > 0 && m.rss < Math.floor(MEMORY_SOFT_LIMIT_MB * 0.85)) {
+        drenarColaChromiumLocal();
+    }
+}, 60000).unref();
+
+// Hasta 3 tarjetas por usuario, SOLO en memoria durante la sesión activa.
+// Nunca se escriben a disco ni se imprimen completas en logs.
+const tarjetasSesionUsuario = new Map();
+
+function obtenerTarjetasSesion(id) {
+    return tarjetasSesionUsuario.get(id) || [];
+}
+
+function guardarTarjetaSesion(id, datosTarjeta) {
+    const lista = obtenerTarjetasSesion(id).slice(0, 3);
+    const ult4 = String(datosTarjeta.ult4 || datosTarjeta.tarjeta?.slice(-4) || '****');
+    const yaExiste = lista.findIndex(t => t.tarjeta === datosTarjeta.tarjeta && t.mes === datosTarjeta.mes && t.anio === datosTarjeta.anio);
+    const item = {
+        tarjeta: datosTarjeta.tarjeta,
+        cc: datosTarjeta.tarjeta,
+        mes: datosTarjeta.mes,
+        anio: datosTarjeta.anio,
+        anioCompleto: datosTarjeta.anioCompleto,
+        cvv: datosTarjeta.cvv,
+        ult4
+    };
+    if (yaExiste >= 0) lista[yaExiste] = item;
+    else if (lista.length < 3) lista.push(item);
+    tarjetasSesionUsuario.set(id, lista);
+    return lista;
+}
+
+function aplicarTarjetaASesion(s, tarjeta) {
+    s.tarjeta = tarjeta.tarjeta;
+    s.cc = tarjeta.cc || tarjeta.tarjeta;
+    s.mes = tarjeta.mes;
+    s.anio = tarjeta.anio;
+    s.anioCompleto = tarjeta.anioCompleto;
+    s.cvv = tarjeta.cvv;
+    s.ult4 = tarjeta.ult4;
+    return s;
+}
+
+async function ejecutarFlujoSegunSesion(ctx, id, s) {
+    s.paso = 'ejecutando';
+    sesiones.set(id, s);
+    if (s.modo === 'telcel_tienda' || s.tipo === 'Telcel.com' || s.tipo === 'Telcel Tienda') {
+        return flujoTelcelTienda(ctx, id, s).catch(err => console.error(`[Telcel.com Usuario ${id}] Error:`, err.message || err));
+    }
+    if (s.modo === 'bait' || s.tipo === 'Bait') {
+        return flujoBait(ctx, id, s).catch(err => console.error(`[Bait Usuario ${id}] Error:`, err.message || err));
+    }
+    return flujoTelcelIndependiente(ctx, id, s).catch(err => console.error(`[Telcel Usuario ${id}] Error:`, err.message || err));
+}
+
 // ==============================================================================
 // 🧹 GESTIÓN DE MENSAJES TEMPORALES (CHAT SIEMPRE LIMPIO)
 // ==============================================================================
@@ -309,7 +446,7 @@ async function smokeTestPlaywright() {
             '--no-first-run',
             '--lang=es-MX'
         ];
-        const testBrowser = await chromium.launch({ headless: true, slowMo: 0, args, timeout: 30000 });
+        const testBrowser = await lanzarChromiumLocalControlado({ headless: true, slowMo: 0, args, timeout: 30000 }, 'smoke-test');
         const testContext = await testBrowser.newContext({ viewport: { width: 800, height: 600 } });
         const testPage = await testContext.newPage();
         await testPage.setContent('<html><body><h1>BOT LEON OK</h1></body></html>');
@@ -500,7 +637,8 @@ async function cerrarSesionNavegador(id) {
             }
             tareasCierre.push(nav.close().catch(() => {}));
             await Promise.allSettled(tareasCierre);
-        } catch(e) {}
+            liberarSlotChromiumLocal(nav, `TELCEL:${id}`);
+        } catch(e) { liberarSlotChromiumLocal(nav, `TELCEL:${id}`); }
     }
     global.gc?.();
 }
@@ -775,12 +913,12 @@ async function lanzarNavegador(id) {
             '--lang=es-MX'
         ];
 
-        navegador = await chromium.launch({
+        navegador = await lanzarChromiumLocalControlado({
             headless: ES_HEADLESS,
             slowMo: 0,
             timeout: 30000,
             args
-        });
+        }, `TELCEL:${id}`);
         contexto = await navegador.newContext({
             locale: 'es-MX',
             timezoneId: 'America/Mexico_City',
@@ -1313,13 +1451,19 @@ async function flujoTelcelIndependiente(ctx, id, datos) {
                             `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
                             `👉 <b>Toca /start para realizar otra recarga.</b>`;
 
+                        const tecladoExito = Markup.inlineKeyboard([
+                            [Markup.button.callback('🔄 OTRA RECARGA — MISMA TARJETA', 'otra_recarga_misma_tarjeta')],
+                            [Markup.button.callback('💳 ELEGIR OTRA TARJETA', 'agregar_tarjeta')],
+                            [Markup.button.callback('🦁 MENÚ PRINCIPAL', 'btn_reiniciar')]
+                        ]);
                         if (capturaVoucher) {
                             await ctx.replyWithPhoto({ source: capturaVoucher }, {
                                 caption: mensajeTelegram.slice(0, 1024),
-                                parse_mode: 'HTML'
+                                parse_mode: 'HTML',
+                                ...tecladoExito
                             });
                         } else {
-                            await ctx.replyWithHTML(mensajeTelegram);
+                            await ctx.reply(mensajeTelegram, { parse_mode: 'HTML', ...tecladoExito });
                         }
 
                     } else if (clasificacionFinal.estado === 'RECHAZO_BANCARIO') {
@@ -1540,7 +1684,7 @@ async function crearNavegadorBait(id) {
     if (usarBrightData) {
         nav = await chromium.connectOverCDP(BRIGHTDATA_BROWSER_WS, { timeout: 35000 });
     } else {
-        nav = await chromium.launch({ headless: ES_HEADLESS, slowMo: 0, timeout: 35000, args });
+        nav = await lanzarChromiumLocalControlado({ headless: ES_HEADLESS, slowMo: 0, timeout: 35000, args }, `BAIT:${id}`);
     }
 
     navegadoresBait.set(id, nav);
@@ -1624,7 +1768,8 @@ async function cerrarNavegadorBait(id) {
                 await ctx.close().catch(() => {});
             }
             await nav.close().catch(() => {});
-        } catch {}
+            liberarSlotChromiumLocal(nav, `BAIT:${id}`);
+        } catch { liberarSlotChromiumLocal(nav, `BAIT:${id}`); }
     } else if (!id) {
         popupsActivosBait.clear();
         const navs = Array.from(navegadoresBait.values());
@@ -1632,7 +1777,8 @@ async function cerrarNavegadorBait(id) {
         for (const nav of navs) {
             try {
                 await nav.close().catch(() => {});
-            } catch {}
+                liberarSlotChromiumLocal(nav, 'BAIT:cleanup');
+            } catch { liberarSlotChromiumLocal(nav, 'BAIT:cleanup'); }
         }
     }
     global.gc?.();
@@ -3835,16 +3981,22 @@ async function flujoBait(ctx, id, datos) {
         `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
         `👉 <b>Toca /start para realizar otra recarga.</b>`;
 
+    const tecladoExito = Markup.inlineKeyboard([
+        [Markup.button.callback('🔄 OTRA RECARGA — MISMA TARJETA', 'otra_recarga_misma_tarjeta')],
+        [Markup.button.callback('💳 ELEGIR / AGREGAR TARJETA', 'agregar_tarjeta')],
+        [Markup.button.callback('🦁 MENÚ PRINCIPAL', 'btn_reiniciar')]
+    ]);
     if (captura) {
         await ctx.replyWithPhoto(
             { source: captura },
             {
                 caption: captionFinal.slice(0, 1024),
-                parse_mode: 'HTML'
+                parse_mode: 'HTML',
+                ...tecladoExito
             }
         );
     } else {
-        await ctx.replyWithHTML(captionFinal);
+        await ctx.reply(captionFinal, { parse_mode: 'HTML', ...tecladoExito });
     }
 
             } else if (clasif.estado === 'PAYPAL_TARJETA_NO_ACEPTADA') {
@@ -3956,7 +4108,8 @@ async function cerrarNavegadorTienda(id) {
                     await ctx.close().catch(() => {});
                 }
                 await nav.close().catch(() => {});
-            } catch (_) {}
+                liberarSlotChromiumLocal(nav, `TELCEL_TIENDA:${userId}`);
+            } catch (_) { liberarSlotChromiumLocal(nav, `TELCEL_TIENDA:${userId}`); }
         }
         navegadoresTienda.clear();
         return;
@@ -3975,7 +4128,8 @@ async function cerrarNavegadorTienda(id) {
             await ctx.close().catch(() => {});
         }
         await nav.close().catch(() => {});
-    } catch (_) {}
+        liberarSlotChromiumLocal(nav, `TELCEL_TIENDA:${id}`);
+    } catch (_) { liberarSlotChromiumLocal(nav, `TELCEL_TIENDA:${id}`); }
 }
 
 async function crearNavegadorTienda(id) {
@@ -3996,7 +4150,7 @@ async function crearNavegadorTienda(id) {
         logTelcelTienda(id, '🌐 Conectando vía BrightData CDP...');
         browser = await chromium.connectOverCDP(BRIGHTDATA_BROWSER_WS, { timeout: 45000 });
     } else {
-        browser = await chromium.launch({
+        browser = await lanzarChromiumLocalControlado({
             headless: ES_HEADLESS,
             args: [
                 '--no-sandbox',
@@ -4009,7 +4163,7 @@ async function crearNavegadorTienda(id) {
                 '--lang=es-MX'
             ],
             timeout: 35000
-        });
+        }, `TELCEL_TIENDA:${id}`);
     }
 
     logTelcelTienda(id, '🟣 [Telcel.com] Navegador iniciado');
@@ -5704,7 +5858,72 @@ bot.action('btn_bait', async ctx => {
 
 bot.action('btn_reiniciar', async ctx => {
     await ctx.answerCbQuery().catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    tarjetasSesionUsuario.delete(id);
     return mostrarMenuInicio(ctx, true);
+});
+
+
+bot.action('agregar_tarjeta', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    const s = sesiones.get(id);
+    if (!s) return mostrarMenuInicio(ctx);
+    const tarjetas = obtenerTarjetasSesion(id);
+    if (tarjetas.length >= 3) {
+        return ctx.reply('⚠️ Ya tienes 3 tarjetas cargadas en esta sesión.');
+    }
+    s.paso = 'tarjeta';
+    sesiones.set(id, s);
+    return enviarLimpio(ctx,
+        `➕ <b>AGREGAR TARJETA ${tarjetas.length + 1} DE 3</b>
+
+` +
+        `Envía los datos de la siguiente tarjeta en el mismo formato.
+` +
+        `🔒 Se conserva solo durante esta sesión activa.`
+    );
+});
+
+bot.action(/^usar_tarjeta_(\d+)$/, async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    const s = sesiones.get(id);
+    if (!s) return mostrarMenuInicio(ctx);
+    const indice = Number(ctx.match[1]);
+    const tarjetas = obtenerTarjetasSesion(id);
+    const tarjeta = tarjetas[indice];
+    if (!tarjeta) return ctx.reply('⚠️ Esa tarjeta ya no está disponible en la sesión.');
+    aplicarTarjetaASesion(s, tarjeta);
+    s.tarjetaSeleccionada = indice;
+    sesiones.set(id, s);
+    return ejecutarFlujoSegunSesion(ctx, id, s);
+});
+
+bot.action('otra_recarga_misma_tarjeta', async ctx => {
+    await ctx.answerCbQuery().catch(() => {});
+    const id = ctx.chat?.id || ctx.from?.id;
+    const s = sesiones.get(id);
+    if (!s || !(s.tarjeta || s.cc)) {
+        return ctx.reply('⚠️ No hay una tarjeta activa en esta sesión. Inicia una recarga nueva.');
+    }
+    s.numero = null;
+    s.paso = 'numero';
+    s.intentosTarjeta = 0;
+    sesiones.set(id, s);
+    return enviarLimpio(ctx,
+        `🔄 <b>OTRA RECARGA CON LA MISMA TARJETA</b>
+` +
+        `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+` +
+        `💳 Método activo: <code>•••• ${s.ult4 || '****'}</code>
+` +
+        `💲 Monto: $${s.monto || 200} MXN
+
+` +
+        `📱 <b>Escribe el nuevo número de 10 dígitos:</b>`,
+        Markup.inlineKeyboard([[Markup.button.callback('🛑 CANCELAR', 'btn_cancelar')]])
+    );
 });
 
 bot.action('btn_reintentar_bait', async ctx => {
@@ -5730,6 +5949,7 @@ bot.action('btn_cancelar', async ctx => {
     if (cerrarNavegadorTienda) await cerrarNavegadorTienda(id).catch(() => {});
     await limpiarMensajesTemporales(ctx, id);
     sesiones.delete(id);
+    tarjetasSesionUsuario.delete(id);
 
     const msg = await ctx.reply(
         `🛑 <b>OPERACIÓN CANCELADA</b>\n` +
@@ -6130,36 +6350,34 @@ bot.on('text', async (ctx, next) => {
         const tel_auto = generarTelefonoUnico();
         const correo_auto = generarCorreoUnico(datosPersona);
 
-        s.tarjeta = tarjeta;
-        s.cc = tarjeta;
-        s.mes = mes;
-        s.anio = anio;
-        s.anioCompleto = anioCompleto;
-        s.cvv = cvv;
-        s.ult4 = ult4;
         s.nombre = datosPersona;
         s.direccion_valida = dirValida;
         s.cp_auto = cp_auto;
         s.tel_auto = tel_auto;
         s.correo_auto = correo_auto;
 
-        if (s.modo === 'telcel_tienda' || s.tipo === 'Telcel.com' || s.tipo === 'Telcel Tienda') {
-            s.paso = 'ejecutando';
-            flujoTelcelTienda(ctx, id, s).catch(err => {
-                console.error(`[Telcel.com Usuario ${id}] Error:`, err.message || err);
-            });
-        } else if (s.modo === 'bait' || s.tipo === 'Bait') {
-            s.paso = 'ejecutando';
-            flujoBait(ctx, id, s).catch(err => {
-                console.error(`[Bait Usuario ${id}] Error:`, err.message || err);
-            });
-        } else {
-            s.paso = 'ejecutando';
-            flujoTelcelIndependiente(ctx, id, s).catch(err => {
-                console.error(`[Telcel Usuario ${id}] Error:`, err.message || err);
-            });
+        const tarjetas = guardarTarjetaSesion(id, { tarjeta, mes, anio, anioCompleto, cvv, ult4 });
+        const indiceActual = Math.max(0, tarjetas.findIndex(t => t.tarjeta === tarjeta && t.mes === mes && t.anio === anio));
+        aplicarTarjetaASesion(s, tarjetas[indiceActual]);
+        s.paso = 'seleccionar_tarjeta';
+        sesiones.set(id, s);
+
+        const filas = tarjetas.map((t, i) => [
+            Markup.button.callback(`💳 USAR TARJETA ${i + 1} •••• ${t.ult4}`, `usar_tarjeta_${i}`)
+        ]);
+        if (tarjetas.length < 3) {
+            filas.push([Markup.button.callback('➕ AGREGAR OTRA TARJETA', 'agregar_tarjeta')]);
         }
-        return;
+        filas.push([Markup.button.callback('🛑 CANCELAR', 'btn_cancelar')]);
+
+        return enviarLimpio(ctx,
+            `💳 <b>MÉTODOS DE PAGO CARGADOS</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+            tarjetas.map((t, i) => `${i + 1}️⃣ <code>•••• ${t.ult4}</code>`).join('\n') +
+            `\n\n👉 Puedes cargar hasta <b>3 tarjetas</b> y elegir cuál usar.\n` +
+            `⚠️ No se prueban automáticamente una tras otra; tú eliges cada intento.`,
+            Markup.inlineKeyboard(filas)
+        );
     }
 
     return mostrarMenuInicio(ctx);
@@ -6208,12 +6426,17 @@ process.once('SIGTERM', async () => {
 });
 
 function iniciarServidorYBot() {
+    console.log(`🧠 MEMORIA SAFE V1 | Chromium local máx=${MAX_BROWSER_CONCURRENCY} | límite suave=${MEMORY_SOFT_LIMIT_MB || 'OFF'}MB`);
     servidor.listen(PUERTO, '0.0.0.0', () => {
         console.log(`🦁 BOT LEÓN INICIADO EN PUERTO: ${PUERTO}`);
     });
 
     verificarEntornoPlaywright();
-    smokeTestPlaywright();
+    if (process.env.RENDER !== 'true' && process.env.SKIP_PLAYWRIGHT_SMOKE_TEST !== 'true') {
+        smokeTestPlaywright();
+    } else {
+        console.log('ℹ️ [Smoke Test] Omitido en Render para ahorrar memoria.');
+    }
 
     console.log("⏳ Conectando BOT LEÓN a Telegram...");
 
@@ -6977,7 +7200,7 @@ bot.action(
             ).catch(() => {});
 
             navegadorNetflixRenovacion =
-                await chromium.launch({
+                await lanzarChromiumLocalControlado({
                     headless: ES_HEADLESS,
                     args: [
                         '--no-sandbox',
@@ -6985,7 +7208,7 @@ bot.action(
                         '--disable-dev-shm-usage',
                         '--lang=es-MX'
                     ]
-                });
+                }, `NETFLIX_RENOVACION:${id}`);
 
             const contextoRenovacion =
                 await navegadorNetflixRenovacion.newContext({
@@ -7321,6 +7544,7 @@ bot.action(
                     await navegadorNetflixRenovacion
                         .close()
                         .catch(() => {});
+                    liberarSlotChromiumLocal(navegadorNetflixRenovacion, `NETFLIX_RENOVACION:${id}`);
                 }
             } catch (_) {}
 
@@ -7378,7 +7602,7 @@ bot.action(
 
 
             navegadorNetflixLocal =
-                await chromium.launch({
+                await lanzarChromiumLocalControlado({
                     headless: ES_HEADLESS,
 
                     args: [
@@ -7387,7 +7611,7 @@ bot.action(
                         '--disable-dev-shm-usage',
                         '--lang=es-MX'
                     ]
-                });
+                }, `NETFLIX:${id}`);
 
 
             const contextoNetflix =
@@ -7833,6 +8057,7 @@ bot.action(
                     await navegadorNetflixLocal
                         .close()
                         .catch(() => {});
+                    liberarSlotChromiumLocal(navegadorNetflixLocal, `NETFLIX:${id}`);
                 }
 
             } catch (_) {}
@@ -7878,7 +8103,5 @@ bot.action(
 // ==============================================================================
 
 iniciarServidorYBot();
-
-
 
 
