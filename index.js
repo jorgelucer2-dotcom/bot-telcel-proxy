@@ -2596,6 +2596,62 @@ async function detectarPasarelaBait(pag, id, intento = 1) {
         pagoConfirmado: false
     };
 }
+
+// 7.0 CAPTURA ENFOCADA DE MENSAJES DE ERROR DE TARJETA EN PAYPAL
+// Devuelve SOLO el recuadro/mensaje visible, no toda la pantalla.
+async function capturarMensajeTarjetaNoAceptadaPayPal(pag, id) {
+    if (!pag || (typeof pag.isClosed === 'function' && pag.isClosed())) return null;
+
+    const contexto = pag.context();
+    const paginas = contexto && contexto.pages ? [...contexto.pages()] : [pag];
+    const popup = popupsActivosBait.get(id);
+    if (popup && !popup.isClosed() && !paginas.includes(popup)) paginas.push(popup);
+
+    const patron = /(?:lo sentimos,?\s*no pudimos asociar esta tarjeta|no se puede completar el pago con esta tarjeta|int[ée]ntelo con otra tarjeta|pruebe una tarjeta diferente|no pudimos asociar esta tarjeta)/i;
+    const limite = Date.now() + 2500;
+
+    while (Date.now() < limite) {
+        for (const p of paginas) {
+            const frames = p.frames ? p.frames() : [p];
+            for (const f of frames) {
+                if (esFramePrerender(f)) continue;
+                try {
+                    const coincidencia = f.getByText(patron).first();
+                    const visible = await coincidencia.isVisible({ timeout: 80 }).catch(() => false);
+                    if (!visible) continue;
+
+                    const texto = (await coincidencia.innerText().catch(() => '')).trim();
+                    console.log(`[Bait Usuario ${id}] 📸 Mensaje PayPal detectado para captura: ${truncar(texto, 160)}`);
+
+                    // Primero intenta capturar el contenedor visual del error (borde/icono/texto).
+                    const contenedores = [
+                        coincidencia.locator('xpath=ancestor::*[@role="alert"][1]'),
+                        coincidencia.locator('xpath=ancestor::*[contains(translate(@class,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),"alert")][1]'),
+                        coincidencia.locator('xpath=ancestor::*[contains(translate(@class,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),"error")][1]')
+                    ];
+
+                    for (const c of contenedores) {
+                        const ok = await c.isVisible({ timeout: 60 }).catch(() => false);
+                        if (!ok) continue;
+                        const box = await c.boundingBox().catch(() => null);
+                        if (box && box.width > 80 && box.height > 30) {
+                            const captura = await c.screenshot().catch(() => null);
+                            if (captura) return { captura, texto };
+                        }
+                    }
+
+                    // Fallback: captura únicamente el texto encontrado.
+                    const captura = await coincidencia.screenshot().catch(() => null);
+                    if (captura) return { captura, texto };
+                } catch (_) {}
+            }
+        }
+        await pag.waitForTimeout(150).catch(() => {});
+    }
+
+    return null;
+}
+
 // 7. DIAGNÓSTICO Y ELEMENTOS INTERNOS DE PAYPAL
 async function paso3DiagnosticoYElementosPayPalBait(pag, id, datos, monto = 300) {
     const popup = popupsActivosBait.get(id);
@@ -2639,6 +2695,33 @@ async function paso3DiagnosticoYElementosPayPalBait(pag, id, datos, monto = 300)
         };
     } catch (errInterno) {
         console.log(`[Bait Usuario ${id}] ⚠️ Detalle en interacción interna PayPal: ${errInterno.message}.`);
+
+        // Si el checkout no se confirmó, antes de llamarlo error genérico buscamos
+        // el mensaje visible de PayPal que indica que la tarjeta no pudo asociarse.
+        let capturaMensajePayPal = null;
+        if ((errInterno.message || '') === 'PAYPAL_CHECKOUT_TARJETA_NO_CONFIRMADO') {
+            capturaMensajePayPal = await capturarMensajeTarjetaNoAceptadaPayPal(pag, id).catch(() => null);
+        }
+
+        if (capturaMensajePayPal) {
+            return {
+                exito: false,
+                pagoConfirmado: false,
+                pasarela: 'PAYPAL',
+                pasarelaConfirmada: true,
+                tipoResultado: 'RESULTADO_PAGO',
+                clasificacion: {
+                    estado: 'PAYPAL_TARJETA_NO_ACEPTADA',
+                    subtipo: 'TARJETA_NO_ASOCIADA',
+                    titulo: '❌ PAYPAL NO ACEPTÓ LA TARJETA',
+                    icono: '❌',
+                    explicacion: 'PayPal indicó que la tarjeta no pudo asociarse o utilizarse para completar el pago.'
+                },
+                textoLeido: capturaMensajePayPal.texto || 'PayPal no pudo asociar esta tarjeta',
+                captura: capturaMensajePayPal.captura
+            };
+        }
+
         return {
             exito: false,
             pagoConfirmado: false,
@@ -3763,6 +3846,19 @@ async function flujoBait(ctx, id, datos) {
     } else {
         await ctx.replyWithHTML(captionFinal);
     }
+
+            } else if (clasif.estado === 'PAYPAL_TARJETA_NO_ACEPTADA') {
+                // La información textual ya viene en el flujo. Aquí se manda SOLO
+                // la captura enfocada del mensaje de PayPal, como pidió el usuario.
+                if (captura) {
+                    await ctx.replyWithPhoto({ source: captura }).catch(() => {});
+                } else {
+                    await ctx.replyWithHTML(
+                        `❌ <b>PAYPAL NO ACEPTÓ LA TARJETA</b>\n` +
+                        `📄 <i>${fragmento}</i>\n` +
+                        `👉 Usa otra forma de pago.`
+                    ).catch(() => {});
+                }
 
             } else if (clasif.estado === 'RECHAZO_BANCARIO') {
                 const sPrev = sesiones.get(id) || {};
