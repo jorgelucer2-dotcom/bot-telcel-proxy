@@ -160,3 +160,13 @@ console.log('[Bot Recargas & Check] Iniciado correctamente y escuchando comandos
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+const http = require('http');
+
+// Servidor HTTP básico para satisfacer el requisito de puertos de Render
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Bot de Telegram activo y funcionando correctamente.\n');
+}).listen(PORT, () => {
+    console.log(`[Servidor Web] Escuchando en el puerto ${PORT}`);
+});
