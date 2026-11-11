@@ -1,0 +1,10 @@
+CORRECCIONES DE DESPLIEGUE
+
+1. Mantiene Web Service porque index.js ya abre un puerto HTTP.
+2. Durante Build instala Chromium con PLAYWRIGHT_BROWSERS_PATH=0 configurado como variable de entorno.
+3. Configura BOT_TOKEN en Render > Environment. No se incluye el .env privado.
+4. Si el servicio se creo manualmente y no desde Blueprint, configura Build Command: npm install && npx playwright install chromium; Start Command: node index.js; y PLAYWRIGHT_BROWSERS_PATH=0 en Environment.
+5. Despliega con Clear build cache & deploy.
+6. Si Chromium falla por librerias de sistema faltantes, puede ser necesario Docker.
+7. Revoca y reemplaza el token anterior de Telegram porque estaba incluido en el codigo y en el ZIP original.
+8. Este archivo solo corrige la configuracion de despliegue y el manejo del token; no cambia la logica de inspeccion.
